@@ -56,6 +56,8 @@ class IngestionService:
                     "page_number": chunk.page_number,
                     "chunk_type": chunk.chunk_type,
                     "content": chunk.content,
+                    "section_path": getattr(chunk, "section_path", ""),
+                    "parent_section": getattr(chunk, "parent_section", ""),
                     "embedding": vector,
                     "filename": filename
                 }

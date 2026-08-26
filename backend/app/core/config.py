@@ -8,8 +8,8 @@ class Settings(BaseSettings):
     
     # Gemini API
     GEMINI_API_KEY: str = ""
-    EMBEDDING_MODEL: str = "text-embedding-004"
-    CHAT_MODEL: str = "gemini-2.5-flash"
+    EMBEDDING_MODEL: str = "gemini-embedding-001"
+    CHAT_MODEL: str = "gemini-3.5-flash"
     
     # Supabase Setup
     SUPABASE_URL: str = ""

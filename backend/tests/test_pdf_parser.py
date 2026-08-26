@@ -23,8 +23,8 @@ def test_chunk_text():
 def test_chunk_text_single_line_breaks():
     parser = PDFParser(chunk_size=80, chunk_overlap=20)
     # Resume/Slide style text with single line breaks
-    resume_text = "John Doe\nSoftware Engineer\n\nExperience:\nSenior Dev at TechCorp (2021-2024)\nBuilt microservices\n\nEducation:\nBS Computer Science"
+    resume_text = "John Doe\nSoftware Engineer\n\nExperience:\nSenior Dev at TechCorp (2021-2024)\nBuilt microservices\n\nEducation:\nBS Computer Science\nGraduated with Honors"
     chunks = parser._chunk_text(resume_text)
     assert len(chunks) >= 2
-    assert any("Experience:" in c for c in chunks)
+    assert any("EXPERIENCE" in c.upper() for c in chunks)
 

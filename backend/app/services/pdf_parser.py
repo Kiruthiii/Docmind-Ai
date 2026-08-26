@@ -1,10 +1,23 @@
-from pypdf import PdfReader
-import pdfplumber
-from PIL import Image
 import io
+import re
 import logging
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
+
+try:
+    from pypdf import PdfReader
+except ImportError:
+    PdfReader = Any  # type: ignore
+
+try:
+    import pdfplumber
+except ImportError:
+    pdfplumber = None  # type: ignore
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = Any  # type: ignore
 
 logger = logging.getLogger("docmind")
 
@@ -12,12 +25,37 @@ class ExtractedChunk(BaseModel):
     page_number: int
     chunk_type: str  # 'text', 'table', 'image_description'
     content: str
+    section_path: str = ""
+    parent_section: str = ""
     metadata: Dict[str, Any] = {}
 
 class PDFParseResult(BaseModel):
     page_count: int
     chunks: List[ExtractedChunk]
     has_scanned_content: bool = False
+
+def _is_structural_heading(line: str) -> bool:
+    """Document-agnostic structural heading detector (works for papers, manuals, textbooks, reports, resumes, and ASCII-decorated headings)."""
+    raw_line = line.strip()
+    if not raw_line:
+        return False
+
+    # Strip decorative ASCII borders: dashes (-), equals (=), asterisks (*), underscores (_)
+    clean_line = re.sub(r'^[\-\=\*\_\s\:\.\#]+', '', raw_line)
+    clean_line = re.sub(r'[\-\=\*\_\s\:\.\#]+$', '', clean_line).strip()
+    if not clean_line or len(clean_line) > 60:
+        return False
+
+    if raw_line.endswith(":") or clean_line.endswith(":"):
+        return True
+    if re.match(r'^(?:[0-9]+(?:\.[0-9]+)*|[A-Z]\.|[IVXLCDM]+\.)\s+[A-Z]', clean_line):
+        return True
+    if clean_line.isupper() and len(clean_line) >= 3 and not re.match(r'^[0-9\s\W]+$', clean_line):
+        return True
+    words = clean_line.split()
+    if 1 <= len(words) <= 4 and all(w[0].isupper() for w in words if w[0].isalpha()):
+        return True
+    return False
 
 class PDFParser:
     def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
@@ -71,18 +109,27 @@ class PDFParser:
                     page_number=page_num,
                     chunk_type="table",
                     content=f"[Table on Page {page_num}]\n{md_table}",
-                    metadata={"filename": filename, "page_number": page_num}
+                    section_path="Tables",
+                    parent_section="Tables",
+                    metadata={"filename": filename, "page_number": page_num, "parent_section": "Tables"}
                 ))
 
-            # 2. Text Extraction & Recursive Chunking
+            # 2. Text Extraction & Parent-Child Section Chunking
             if text:
-                text_chunks = self._chunk_text(text)
-                for chunk_str in text_chunks:
+                text_chunks = self._chunk_text_structured(text)
+                for chunk_info in text_chunks:
                     extracted_chunks.append(ExtractedChunk(
                         page_number=page_num,
                         chunk_type="text",
-                        content=chunk_str,
-                        metadata={"filename": filename, "page_number": page_num}
+                        content=chunk_info["content"],
+                        section_path=chunk_info["section_path"],
+                        parent_section=chunk_info["parent_section"],
+                        metadata={
+                            "filename": filename,
+                            "page_number": page_num,
+                            "section_path": chunk_info["section_path"],
+                            "parent_section": chunk_info["parent_section"]
+                        }
                     ))
 
         if plumber_pdf:
@@ -119,42 +166,94 @@ class PDFParser:
         return "\n".join([header_str, sep_str] + row_strs)
 
     def _chunk_text(self, text: str) -> List[str]:
-        """Splits long text into semantically focused overlapping chunks using multi-level splitting."""
+        res = self._chunk_text_structured(text)
+        return [r["content"] for r in res]
+
+    def _chunk_text_structured(self, text: str) -> List[Dict[str, Any]]:
+        """Line-by-line section boundary parser for document-agnostic parent-child structure."""
         if not text:
             return []
 
-        # 1. Split by double line breaks first
-        paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+        raw_lines = [l.strip() for l in text.split("\n") if l.strip()]
+        if not raw_lines:
+            return []
 
-        # 2. Break down large paragraphs by single line breaks (common in resumes, slides, tables)
-        blocks = []
-        for p in paragraphs:
-            if len(p) > self.chunk_size:
-                lines = [l.strip() for l in p.split("\n") if l.strip()]
-                blocks.extend(lines)
+        structured_chunks = []
+        current_parent = "General"
+        current_sub = ""
+        current_lines = []
+
+        def flush_current():
+            nonlocal current_lines, current_parent, current_sub, structured_chunks
+            if not current_lines:
+                return
+            body = "\n".join(current_lines).strip()
+            if not body:
+                return
+            sec_path = f"{current_parent} > {current_sub}" if current_sub else current_parent
+            
+            # Preserve sub-item title in body content if not already present
+            title_prefix = f"### {current_sub}\n" if (current_sub and current_sub.lower() not in body.lower()) else ""
+            full_body = f"{title_prefix}{body}".strip()
+            
+            # Sub-chunk long text blocks (>600 chars) to ensure tight snippet retrieval rather than full-page dumps
+            if len(full_body) > 600 and len(current_lines) >= 4:
+                sub_blocks = []
+                curr_block = []
+                curr_len = 0
+                for l_item in current_lines:
+                    curr_block.append(l_item)
+                    curr_len += len(l_item)
+                    if curr_len >= 400:
+                        sub_blocks.append("\n".join(curr_block).strip())
+                        curr_block = []
+                        curr_len = 0
+                if curr_block:
+                    sub_blocks.append("\n".join(curr_block).strip())
+
+                for s_blk in sub_blocks:
+                    if s_blk:
+                        s_body = f"{title_prefix}{s_blk}".strip()
+                        structured_chunks.append({
+                            "content": f"Section: {sec_path}\n{s_body}",
+                            "section_path": sec_path,
+                            "parent_section": current_parent
+                        })
             else:
-                blocks.append(p)
+                structured_chunks.append({
+                    "content": f"Section: {sec_path}\n{full_body}",
+                    "section_path": sec_path,
+                    "parent_section": current_parent
+                })
+            current_lines = []
 
-        # 3. Accumulate blocks into target chunk size
-        chunks = []
-        current_chunk = ""
+        for line in raw_lines:
+            raw_l = line.strip()
+            clean_l = re.sub(r'^[\-\=\*\_\s\:\.\#]+', '', raw_l)
+            clean_l = re.sub(r'[\-\=\*\_\s\:\.\#]+$', '', clean_l).strip()
+            clean_l_nobullet = re.sub(r'^[•\-\*\\s]+', '', clean_l).strip()
+            has_bullet = bool(re.match(r'^(?:[•\*\]|[\-\*]\s)', raw_l))
 
-        for block in blocks:
-            if len(current_chunk) + len(block) + 2 <= self.chunk_size:
-                current_chunk += ("\n\n" if current_chunk else "") + block
-            else:
-                if current_chunk:
-                    chunks.append(current_chunk)
-                if len(block) > self.chunk_size:
-                    # Slice oversized single block into overlapping windows
-                    step = max(1, self.chunk_size - self.chunk_overlap)
-                    sub_chunks = [block[i:i + self.chunk_size] for i in range(0, len(block), step)]
-                    chunks.extend(sub_chunks[:-1])
-                    current_chunk = sub_chunks[-1] if sub_chunks else ""
+            if _is_structural_heading(line):
+                is_decorated = bool(re.match(r'^[\-\=\*\_\#]{3,}', raw_l)) or bool(re.search(r'[\-\=\*\_\#]{3,}$', raw_l))
+                is_all_caps = clean_l_nobullet.isupper() and len(clean_l_nobullet) >= 3 and not re.match(r'^[0-9\s\W]+$', clean_l_nobullet)
+                is_numbered_section = bool(re.match(r'^(?:[0-9]+(?:\.[0-9]+)*|[A-Z]\.|[IVXLCDM]+\.)\s+[A-Z]', clean_l_nobullet))
+
+                # Dynamic, document-agnostic section detection (NO hardcoded section names/keywords):
+                # A line is a major parent section if it has ASCII borders, ALL-CAPS text, or numbered heading syntax AND is not a bullet item
+                is_major = (is_decorated or is_all_caps or is_numbered_section) and not has_bullet and not (":" in clean_l_nobullet and len(clean_l_nobullet) > 25)
+
+                # 1. Flush body lines collected under previous section
+                flush_current()
+
+                # 2. Update section state for new section
+                if is_major:
+                    current_parent = clean_l_nobullet.upper()
+                    current_sub = ""
                 else:
-                    current_chunk = block
+                    current_sub = clean_l_nobullet
+            else:
+                current_lines.append(line)
 
-        if current_chunk:
-            chunks.append(current_chunk)
-
-        return chunks
+        flush_current()
+        return structured_chunks
