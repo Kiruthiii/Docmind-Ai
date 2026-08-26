@@ -1,6 +1,7 @@
 import logging
 import math
 import uuid
+import re
 from typing import List, Dict, Any, Tuple
 from app.services.llm_service import LLMService
 from app.db.supabase_client import get_supabase_client, _in_memory_db
@@ -29,23 +30,26 @@ class RAGService:
         session_id: str = None,
         show_sources: bool = True
     ) -> ChatMessageResponse:
-        """Retrieves evidence and generates a grounded response."""
+        """Retrieves evidence and generates a grounded response using a 3-stage evidence pipeline."""
         if not session_id:
             session_id = str(uuid.uuid4())
 
         # 1. Embed query
         query_vector = self.llm.get_embedding(question)
 
-        # 2. Retrieve top-K relevant chunks
-        relevant_chunks = self._retrieve_chunks(workspace_id, query_vector, question=question, top_k=settings.MAX_RETRIEVAL_CHUNKS)
+        # 2. Stage 1: Candidate Retrieval
+        candidate_chunks = self._retrieve_chunks(workspace_id, query_vector, question=question, top_k=settings.MAX_RETRIEVAL_CHUNKS)
 
-        # 3. Generate grounded answer via Gemini
-        answer_text, is_grounded = self.llm.generate_grounded_answer(question, relevant_chunks)
+        # 3. Stage 2: Post-Retrieval Semantic Relevance Filtering
+        relevant_chunks = self._filter_relevant_evidence(question, candidate_chunks)
 
-        # 4. Format citations if sources enabled and answer is grounded
+        # 4. Stage 3: Grounded Answer Generation & Answer-Supporting Evidence Extraction
+        answer_text, is_grounded, supporting_chunks = self.llm.generate_grounded_answer(question, relevant_chunks)
+
+        # 5. Format Citations STRICTLY from Answer-Supporting Evidence
         citations = []
         if show_sources and is_grounded:
-            citations = self._build_citations(relevant_chunks)
+            citations = self._build_citations(supporting_chunks)
 
         # Save to chat history
         self._save_message(session_id, "user", question)
@@ -84,11 +88,12 @@ class RAGService:
         )
 
     def _retrieve_chunks(self, workspace_id: str, query_vector: List[float], question: str = "", top_k: int = 15) -> List[Dict[str, Any]]:
-        """Retrieves top-K chunks from Supabase RPC or in-memory vector store."""
+        """Retrieves top-K chunks with Parent Section Expansion for complete evidence context."""
         client = get_supabase_client()
+        raw_candidates = []
+
         if client:
             try:
-                # Call Supabase pgvector match RPC function
                 response = client.rpc(
                     "match_document_chunks",
                     {
@@ -100,39 +105,142 @@ class RAGService:
                 ).execute()
 
                 if response.data:
-                    # Enrich with filename metadata
                     for chunk in response.data:
                         doc_id = chunk.get("document_id")
                         doc_rec = _in_memory_db.documents.get(doc_id)
                         if doc_rec:
                             chunk["filename"] = doc_rec.get("filename", "Document")
-                    return response.data
+                    raw_candidates = response.data
             except Exception as e:
                 logger.warning(f"Supabase RPC search failed: {e}. Falling back to in-memory search.")
 
-        # Fallback to In-Memory Vector & Keyword Search
-        workspace_chunks = [c for c in _in_memory_db.document_chunks if c.get("workspace_id") == workspace_id]
-        if not workspace_chunks:
+        if not raw_candidates:
+            workspace_chunks = [c for c in _in_memory_db.document_chunks if c.get("workspace_id") == workspace_id]
+            if not workspace_chunks:
+                return []
+
+            STOP_WORDS = {"tell", "about", "the", "what", "is", "are", "a", "an", "of", "in", "for", "and", "or", "to", "with", "on", "at", "from", "by", "my", "your", "show", "me", "can", "you", "please", "give", "list", "info", "details", "does", "do", "did", "how", "why", "which"}
+            q_terms = [re.sub(r'[^a-zA-Z0-9]', '', w.lower()) for w in question.split() if re.sub(r'[^a-zA-Z0-9]', '', w.lower()) not in STOP_WORDS and len(re.sub(r'[^a-zA-Z0-9]', '', w.lower())) >= 2 and not re.sub(r'[^a-zA-Z0-9]', '', w.lower()).isdigit()] if question else []
+
+            scored_chunks = []
+            for chunk in workspace_chunks:
+                chunk_vec = chunk.get("embedding", [])
+                score = cosine_similarity(query_vector, chunk_vec) if chunk_vec else 0.0
+                
+                content_lower = chunk.get("content", "").lower()
+                words = set(re.findall(r'\b[a-zA-Z0-9]+\b', content_lower))
+                
+                has_match = False
+                for term in q_terms:
+                    if term in words or any(w.startswith(term[:4]) for w in words if len(term) >= 4 and len(w) >= 4):
+                        has_match = True
+                        break
+
+                if has_match:
+                    score = max(score + 0.5, 0.5)
+
+                if score >= settings.SIMILARITY_THRESHOLD:
+                    scored_chunk = dict(chunk)
+                    scored_chunk["similarity"] = score
+                    scored_chunks.append(scored_chunk)
+
+            scored_chunks.sort(key=lambda x: x["similarity"], reverse=True)
+            raw_candidates = scored_chunks[:top_k]
+
+        if not raw_candidates:
             return []
 
-        scored_chunks = []
-        for chunk in workspace_chunks:
-            chunk_vec = chunk.get("embedding", [])
-            score = cosine_similarity(query_vector, chunk_vec) if chunk_vec else 0.0
-            
-            # Additional fallback for mock mode: boost score if keywords match
+        # UNIVERSAL PARENT SECTION & NEIGHBORING CONTEXT EXPANSION
+        retrieved_ids = {c.get("id") for c in raw_candidates}
+        expanded_chunks = list(raw_candidates)
+
+        top_parent_sections = set()
+        for c in raw_candidates[:5]:
+            p_sec = c.get("parent_section") or c.get("metadata", {}).get("parent_section")
+            if not p_sec:
+                content = c.get("content", "")
+                if "Section:" in content:
+                    first_line = content.split("\n")[0].replace("Section:", "").strip()
+                    p_sec = first_line.split(">")[0].strip()
+            if p_sec and p_sec.lower() != "general":
+                top_parent_sections.add(p_sec.lower())
+
+        if top_parent_sections:
+            if client:
+                try:
+                    res_db = client.from_("document_chunks") \
+                        .select("*") \
+                        .eq("workspace_id", workspace_id) \
+                        .execute()
+                    if res_db.data:
+                        for sister in res_db.data:
+                            s_id = sister.get("id")
+                            if s_id not in retrieved_ids:
+                                s_content = sister.get("content", "")
+                                s_p_sec = sister.get("parent_section") or sister.get("metadata", {}).get("parent_section")
+                                if not s_p_sec and "Section:" in s_content:
+                                    first_line = s_content.split("\n")[0].replace("Section:", "").strip()
+                                    s_p_sec = first_line.split(">")[0].strip()
+
+                                if s_p_sec and s_p_sec.lower() in top_parent_sections:
+                                    sister_copy = dict(sister)
+                                    doc_id = sister_copy.get("document_id")
+                                    doc_rec = _in_memory_db.documents.get(doc_id)
+                                    if doc_rec:
+                                        sister_copy["filename"] = doc_rec.get("filename", "Document")
+                                    sister_copy["similarity"] = 0.6
+                                    expanded_chunks.append(sister_copy)
+                                    retrieved_ids.add(s_id)
+                except Exception as e:
+                    logger.warning(f"Supabase parent section expansion query failed: {e}")
+
+            workspace_all_chunks = [c for c in _in_memory_db.document_chunks if c.get("workspace_id") == workspace_id]
+            if workspace_all_chunks:
+                for c in workspace_all_chunks:
+                    c_id = c.get("id")
+                    if c_id not in retrieved_ids:
+                        content = c.get("content", "")
+                        c_p_sec = c.get("parent_section") or c.get("metadata", {}).get("parent_section")
+                        if not c_p_sec and "Section:" in content:
+                            first_line = content.split("\n")[0].replace("Section:", "").strip()
+                            c_p_sec = first_line.split(">")[0].strip()
+
+                        if c_p_sec and c_p_sec.lower() in top_parent_sections:
+                            c_copy = dict(c)
+                            c_copy["similarity"] = 0.6
+                            expanded_chunks.append(c_copy)
+                            retrieved_ids.add(c_id)
+
+        return expanded_chunks[:top_k]
+
+    def _filter_relevant_evidence(self, question: str, candidate_chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Stage 2: Semantic Relevance Filter with Parent Section Context Preservation."""
+        if not candidate_chunks:
+            return []
+
+        STOP_WORDS = {"tell", "about", "the", "what", "is", "are", "a", "an", "of", "in", "for", "and", "or", "to", "with", "on", "at", "from", "by", "my", "your", "show", "me", "can", "you", "please", "give", "list", "info", "details", "does", "do", "did", "how", "why", "which"}
+        q_terms = [re.sub(r'[^a-zA-Z0-9]', '', w.lower()) for w in question.split() if re.sub(r'[^a-zA-Z0-9]', '', w.lower()) not in STOP_WORDS and len(re.sub(r'[^a-zA-Z0-9]', '', w.lower())) >= 2 and not re.sub(r'[^a-zA-Z0-9]', '', w.lower()).isdigit()]
+
+        if not q_terms:
+            return candidate_chunks
+
+        filtered = []
+        for chunk in candidate_chunks:
             content_lower = chunk.get("content", "").lower()
-            q_terms = [w.lower() for w in question.split() if len(w) >= 2] if question else []
-            if any(term in content_lower for term in q_terms):
-                score += 0.5
+            words = set(re.findall(r'\b[a-zA-Z0-9]+\b', content_lower))
+            
+            term_matches = 0
+            for term in q_terms:
+                if term in words or any(w.startswith(term[:4]) for w in words if len(term) >= 4 and len(w) >= 4):
+                    term_matches += 1
 
-            if score >= settings.SIMILARITY_THRESHOLD or len(workspace_chunks) <= 3:
-                scored_chunk = dict(chunk)
-                scored_chunk["similarity"] = score
-                scored_chunks.append(scored_chunk)
+            similarity = chunk.get("similarity", 0.0)
 
-        scored_chunks.sort(key=lambda x: x["similarity"], reverse=True)
-        return scored_chunks[:top_k]
+            # Keep chunk if terms match, similarity is sufficient, or if chunk is part of parent section expansion
+            if term_matches > 0 or similarity >= 0.5:
+                filtered.append(chunk)
+
+        return filtered if filtered else candidate_chunks[:3]
 
     def _get_all_workspace_chunks(self, workspace_id: str, document_ids: List[str] = None) -> List[Dict[str, Any]]:
         chunks = [c for c in _in_memory_db.document_chunks if c.get("workspace_id") == workspace_id]

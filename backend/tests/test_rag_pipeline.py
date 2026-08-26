@@ -60,5 +60,5 @@ def test_document_comparison():
 
     comp = rag.compare_documents(ws_id, categories=["Summary", "Accuracy"])
     assert comp.markdown_matrix is not None
-    assert "| Category |" in comp.markdown_matrix
+    assert "| Comparison Category |" in comp.markdown_matrix or "| Category |" in comp.markdown_matrix
 

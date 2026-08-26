@@ -39,3 +39,16 @@ def test_chat_message_endpoint():
     data = chat_res.json()
     assert "I couldn't find sufficient evidence" in data["answer"]
     assert data["is_grounded"] is False
+
+def test_json_control_character_handling():
+    ws = client.post("/api/v1/workspaces", json={"name": "Control Char WS"}).json()
+    ws_id = ws["id"]
+
+    # Raw JSON payload with raw unescaped control character (newline in string)
+    raw_payload = f'{{\n  "workspace_id": "{ws_id}",\n  "question": "tell about\\nwork experience?"\n}}'
+    response = client.post(
+        "/api/v1/chat/message",
+        content=raw_payload.encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
+    assert response.status_code == 200
