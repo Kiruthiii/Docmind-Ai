@@ -297,3 +297,105 @@ def test_10_all_precision_queries():
     res6 = rag.query_workspace(ws_id, "what is the capital of Japan?")
     assert res6.is_grounded is False
     assert "I couldn't find sufficient evidence" in res6.answer
+
+
+def test_short_heading_preservation_first_project():
+    from app.services.rag_service import RAGService
+    from app.db.supabase_client import _in_memory_db
+
+    rag = RAGService()
+    ws_id = str(uuid.uuid4())
+    doc_id = str(uuid.uuid4())
+    _in_memory_db.documents[doc_id] = {"id": doc_id, "filename": "sample_candidate_resume.pdf"}
+
+    _in_memory_db.document_chunks.append({
+        "id": "c1",
+        "document_id": doc_id,
+        "workspace_id": ws_id,
+        "page_number": 2,
+        "chunk_type": "text",
+        "content": "Section: ACADEMIC PROJECTS > Smart Dining App\n### Smart Dining App\nDeveloped a web application to enhance the digital dining experience.",
+        "section_path": "ACADEMIC PROJECTS > Smart Dining App",
+        "parent_section": "ACADEMIC PROJECTS",
+        "embedding": rag.llm.get_embedding("Smart Dining App"),
+        "filename": "sample_candidate_resume.pdf",
+        "metadata": {"filename": "sample_candidate_resume.pdf", "page_number": 2, "parent_section": "ACADEMIC PROJECTS"}
+    })
+
+    res = rag.query_workspace(ws_id, "List the projects")
+    assert res.is_grounded is True
+    assert "### Smart Dining App" in res.answer or "Smart Dining App" in res.answer
+
+
+def test_typo_tolerance_query():
+    from app.services.rag_service import RAGService
+    from app.db.supabase_client import _in_memory_db
+
+    rag = RAGService()
+    ws_id = str(uuid.uuid4())
+    doc_id = str(uuid.uuid4())
+    _in_memory_db.documents[doc_id] = {"id": doc_id, "filename": "sample_candidate_resume.pdf"}
+
+    _in_memory_db.document_chunks.append({
+        "id": "c_typo",
+        "document_id": doc_id,
+        "workspace_id": ws_id,
+        "page_number": 2,
+        "chunk_type": "text",
+        "content": "Section: ACADEMIC PROJECTS > Smart Dining App\n### Smart Dining App\nDeveloped a web application to enhance the digital dining experience.",
+        "section_path": "ACADEMIC PROJECTS > Smart Dining App",
+        "parent_section": "ACADEMIC PROJECTS",
+        "embedding": rag.llm.get_embedding("Smart Dining App"),
+        "filename": "sample_candidate_resume.pdf",
+        "metadata": {"filename": "sample_candidate_resume.pdf", "page_number": 2, "parent_section": "ACADEMIC PROJECTS"}
+    })
+
+    res = rag.query_workspace(ws_id, "List rpojects")
+    assert res.is_grounded is True
+    assert "Smart Dining App" in res.answer
+
+
+def test_section_isolation_prevents_work_experience_leakage():
+    from app.services.rag_service import RAGService
+    from app.db.supabase_client import _in_memory_db
+
+    rag = RAGService()
+    ws_id = str(uuid.uuid4())
+    doc_id = str(uuid.uuid4())
+    _in_memory_db.documents[doc_id] = {"id": doc_id, "filename": "sample_candidate_resume.pdf"}
+
+    _in_memory_db.document_chunks.append({
+        "id": "c_exp",
+        "document_id": doc_id,
+        "workspace_id": ws_id,
+        "page_number": 1,
+        "chunk_type": "text",
+        "content": "Section: WORK EXPERIENCE\nFrontend Developer Trainee | Apex Corp\nManaging project responsibilities and building UI.",
+        "section_path": "WORK EXPERIENCE",
+        "parent_section": "WORK EXPERIENCE",
+        "embedding": rag.llm.get_embedding("Apex Corp project responsibilities"),
+        "filename": "sample_candidate_resume.pdf",
+        "metadata": {"filename": "sample_candidate_resume.pdf", "page_number": 1, "parent_section": "WORK EXPERIENCE"}
+    })
+
+    _in_memory_db.document_chunks.append({
+        "id": "c_proj",
+        "document_id": doc_id,
+        "workspace_id": ws_id,
+        "page_number": 2,
+        "chunk_type": "text",
+        "content": "Section: ACADEMIC PROJECTS > Legal Document AI\n### Legal Document AI\nDeveloped an AI-powered legal document analysis and risk detection application.",
+        "section_path": "ACADEMIC PROJECTS > Legal Document AI",
+        "parent_section": "ACADEMIC PROJECTS",
+        "embedding": rag.llm.get_embedding("Legal Document AI"),
+        "filename": "sample_candidate_resume.pdf",
+        "metadata": {"filename": "sample_candidate_resume.pdf", "page_number": 2, "parent_section": "ACADEMIC PROJECTS"}
+    })
+
+    res = rag.query_workspace(ws_id, "list the projects")
+    assert res.is_grounded is True
+    assert "Legal Document AI" in res.answer
+    assert "Apex Corp" not in res.answer
+
+
+

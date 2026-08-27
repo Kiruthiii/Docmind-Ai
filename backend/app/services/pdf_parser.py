@@ -243,6 +243,8 @@ class PDFParser:
                 # A line is a major parent section if it has ASCII borders, ALL-CAPS text, or numbered heading syntax AND is not a bullet item
                 is_major = (is_decorated or is_all_caps or is_numbered_section) and not has_bullet and not (":" in clean_l_nobullet and len(clean_l_nobullet) > 25)
 
+                had_lines = bool(current_lines)
+
                 # 1. Flush body lines collected under previous section
                 flush_current()
 
@@ -250,6 +252,9 @@ class PDFParser:
                 if is_major:
                     current_parent = clean_l_nobullet.upper()
                     current_sub = ""
+                elif current_sub and not had_lines:
+                    current_parent = current_sub.upper()
+                    current_sub = clean_l_nobullet
                 else:
                     current_sub = clean_l_nobullet
             else:

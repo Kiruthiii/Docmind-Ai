@@ -7,6 +7,7 @@ from app.core.config import settings
 
 logger = logging.getLogger("docmind")
 
+import difflib
 import re
 
 class LLMService:
@@ -220,37 +221,80 @@ class LLMService:
         STOP_WORDS = {"tell", "about", "the", "what", "is", "are", "a", "an", "of", "in", "for", "and", "or", "to", "with", "on", "at", "from", "by", "my", "your", "show", "me", "can", "you", "please", "give", "list", "info", "details", "does", "do", "did", "how", "why", "which"}
         q_terms = [re.sub(r'[^a-zA-Z0-9]', '', w.lower()) for w in question.split() if re.sub(r'[^a-zA-Z0-9]', '', w.lower()) not in STOP_WORDS and len(re.sub(r'[^a-zA-Z0-9]', '', w.lower())) >= 2 and not re.sub(r'[^a-zA-Z0-9]', '', w.lower()).isdigit()]
 
-        # 1. Filter context_chunks to keep ONLY question-relevant chunks or sister section chunks under matching parent section
+        def term_matches_text(term: str, text: str) -> bool:
+            if term in text:
+                return True
+            if len(term) >= 4:
+                stem = term[:4]
+                words = set(re.findall(r'\b[a-zA-Z0-9]+\b', text))
+                if any(w.startswith(stem) for w in words if len(w) >= 4):
+                    return True
+                for w in words:
+                    if len(w) >= 4 and abs(len(w) - len(term)) <= 2:
+                        if difflib.SequenceMatcher(None, term, w).ratio() >= 0.75:
+                            return True
+            return False
+
+        # 1. Filter context_chunks: Prioritize parent sections whose names match the query terms (e.g. ACADEMIC PROJECTS for 'projects')
         relevant_chunks = []
         target_parents = set()
-        
+        section_header_matches = set()
+
         for chunk in context_chunks:
-            content_lower = chunk.get("content", "").lower()
-            if any(term in content_lower for term in q_terms):
-                if "Section:" in chunk.get("content", ""):
-                    header = chunk.get("content", "").split("\n")[0].replace("Section:", "").strip()
-                    parent_sec = header.split(">")[0].strip().lower()
-                    if parent_sec and parent_sec != "general":
-                        target_parents.add(parent_sec)
+            content = chunk.get("content", "")
+            p_sec = chunk.get("parent_section", "").lower()
+            sec_path = chunk.get("section_path", "").lower()
+            if "Section:" in content:
+                header = content.split("\n")[0].replace("Section:", "").strip()
+                if not p_sec:
+                    p_sec = header.split(">")[0].strip().lower()
+                if not sec_path:
+                    sec_path = header.lower()
+
+            if p_sec and p_sec != "general":
+                if any(term_matches_text(term, p_sec) or term_matches_text(term, sec_path) for term in q_terms):
+                    section_header_matches.add(p_sec)
+
+        if section_header_matches:
+            target_parents = section_header_matches
+        else:
+            for chunk in context_chunks:
+                content_lower = chunk.get("content", "").lower()
+                if any(term_matches_text(term, content_lower) for term in q_terms):
+                    if "Section:" in chunk.get("content", ""):
+                        header = chunk.get("content", "").split("\n")[0].replace("Section:", "").strip()
+                        parent_sec = header.split(">")[0].strip().lower()
+                        if parent_sec and parent_sec != "general":
+                            target_parents.add(parent_sec)
 
         for chunk in context_chunks:
             content = chunk.get("content", "")
             content_lower = content.lower()
             p_sec = chunk.get("parent_section", "").lower()
-            if not p_sec and "Section:" in content:
+            sec_path = chunk.get("section_path", "").lower()
+            if "Section:" in content:
                 header = content.split("\n")[0].replace("Section:", "").strip()
-                p_sec = header.split(">")[0].strip().lower()
+                if not p_sec:
+                    p_sec = header.split(">")[0].strip().lower()
+                if not sec_path:
+                    sec_path = header.lower()
 
             is_relevant = False
-            if any(term in content_lower for term in q_terms):
-                is_relevant = True
-            elif p_sec and p_sec in target_parents:
-                is_relevant = True
+            if section_header_matches:
+                if (p_sec and p_sec in section_header_matches) or any(term_matches_text(term, p_sec) or term_matches_text(term, sec_path) for term in q_terms):
+                    is_relevant = True
+            else:
+                if any(term_matches_text(term, content_lower) for term in q_terms):
+                    is_relevant = True
+                elif p_sec and p_sec in target_parents:
+                    is_relevant = True
 
             if is_relevant:
                 relevant_chunks.append(chunk)
 
         if not relevant_chunks:
+            if q_terms:
+                return (refusal_phrase, False, [])
             relevant_chunks = context_chunks[:2]
 
         matched_blocks = []
@@ -268,7 +312,7 @@ class LLMService:
                 clean_l = re.sub(r'^[\-\=\*\_\s\:\.\#]+|[\-\=\*\_\s\:\.\#]+$', '', raw_l).strip()
                 if not clean_l or clean_l.isupper() or all(c in "-------======******______ " for c in raw_l) or raw_l.startswith("Section:"):
                     continue
-                if len(clean_l) < 15 and not clean_l.startswith("###") and not clean_l.startswith("-") and not clean_l.startswith("*"):
+                if len(clean_l) < 15 and not (raw_l.startswith("#") or raw_l.startswith("-") or raw_l.startswith("*") or raw_l.startswith("•")):
                     continue
                 chunk_matched_lines.append(raw_l)
 
