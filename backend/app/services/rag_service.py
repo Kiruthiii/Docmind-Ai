@@ -1,3 +1,4 @@
+import difflib
 import logging
 import math
 import uuid
@@ -9,6 +10,19 @@ from app.schemas.chat import Citation, ChatMessageResponse, ComparisonResponse
 from app.core.config import settings
 
 logger = logging.getLogger("docmind")
+
+def term_matches_words(term: str, words: set) -> bool:
+    if term in words:
+        return True
+    if len(term) >= 4:
+        stem = term[:4]
+        if any(w.startswith(stem) for w in words if len(w) >= 4):
+            return True
+        for w in words:
+            if len(w) >= 4 and abs(len(w) - len(term)) <= 2:
+                if difflib.SequenceMatcher(None, term, w).ratio() >= 0.75:
+                    return True
+    return False
 
 def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
     """Calculates cosine similarity between two float vectors."""
@@ -132,7 +146,7 @@ class RAGService:
                 
                 has_match = False
                 for term in q_terms:
-                    if term in words or any(w.startswith(term[:4]) for w in words if len(term) >= 4 and len(w) >= 4):
+                    if term_matches_words(term, words):
                         has_match = True
                         break
 
@@ -224,6 +238,29 @@ class RAGService:
         if not q_terms:
             return candidate_chunks
 
+        # Check if candidate chunks contain direct section header matches for the query terms
+        header_matched_chunks = []
+        for chunk in candidate_chunks:
+            p_sec = (chunk.get("parent_section") or chunk.get("metadata", {}).get("parent_section") or "").lower()
+            s_path = (chunk.get("section_path") or chunk.get("metadata", {}).get("section_path") or "").lower()
+            if not p_sec and "Section:" in chunk.get("content", ""):
+                header = chunk.get("content", "").split("\n")[0].replace("Section:", "").strip()
+                p_sec = header.split(">")[0].strip().lower()
+                s_path = header.lower()
+
+            words_header = set(re.findall(r'\b[a-zA-Z0-9]+\b', f"{p_sec} {s_path}"))
+            if any(term_matches_words(term, words_header) for term in q_terms):
+                header_matched_chunks.append(chunk)
+
+        if header_matched_chunks:
+            header_parents = {(c.get("parent_section") or "").lower() for c in header_matched_chunks if c.get("parent_section")}
+            filtered = [
+                c for c in candidate_chunks
+                if (c.get("parent_section") or "").lower() in header_parents
+                or any(term_matches_words(t, set(re.findall(r'\b[a-zA-Z0-9]+\b', (c.get("section_path") or "").lower()))) for t in q_terms)
+            ]
+            return filtered if filtered else header_matched_chunks
+
         filtered = []
         for chunk in candidate_chunks:
             content_lower = chunk.get("content", "").lower()
@@ -231,7 +268,7 @@ class RAGService:
             
             term_matches = 0
             for term in q_terms:
-                if term in words or any(w.startswith(term[:4]) for w in words if len(term) >= 4 and len(w) >= 4):
+                if term_matches_words(term, words):
                     term_matches += 1
 
             similarity = chunk.get("similarity", 0.0)
