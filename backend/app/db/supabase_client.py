@@ -17,11 +17,17 @@ class InMemoryDatabase:
         logger.info("Initialized In-Memory DB fallback mode.")
 
 _in_memory_db = InMemoryDatabase()
+_supabase_client_instance: Optional[Client] = None
 
 def get_supabase_client() -> Optional[Client]:
+    global _supabase_client_instance
+    if _supabase_client_instance is not None:
+        return _supabase_client_instance
+
     if settings.SUPABASE_URL and settings.SUPABASE_KEY and "your-project" not in settings.SUPABASE_URL:
         try:
-            return create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+            _supabase_client_instance = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+            return _supabase_client_instance
         except Exception as e:
             logger.warning(f"Failed to connect to Supabase: {e}. Falling back to in-memory mode.")
             return None

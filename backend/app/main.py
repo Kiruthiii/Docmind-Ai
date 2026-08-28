@@ -32,7 +32,7 @@ class JSONControlCharMiddleware(BaseHTTPMiddleware):
                                 # Replace raw unescaped control characters (\n, \r, \t) with JSON escape sequences
                                 sanitized = re.sub(
                                     r'[\x00-\x1f]',
-                                    lambda m: '\\n' if m.group(0) == '\n' else ('\\r' if m.group(0) == '\r' else ('\\t' if m.group(0) == '\t' else '')),
+                                    lambda m: '\\n' if m.group(0) == '\n' else ('\\r' if m.group(0) == '\r' else ('\\t' if m.group(0) == '\t' else f'\\u{ord(m.group(0)):04x}')),
                                     decoded
                                 )
                                 async def receive():

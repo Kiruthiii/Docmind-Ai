@@ -8,6 +8,16 @@ class Citation(BaseModel):
     content_snippet: str
     chunk_type: str
 
+class Claim(BaseModel):
+    text: str
+    evidence_ids: List[str] = []
+
+class GroundedAnswerSchema(BaseModel):
+    answer: str
+    answer_type: str
+    sufficient_evidence: bool = True
+    claims: List[Claim] = []
+
 class ChatMessageRequest(BaseModel):
     workspace_id: str
     session_id: Optional[str] = None
