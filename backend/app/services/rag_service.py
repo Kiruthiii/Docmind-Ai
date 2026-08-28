@@ -4,25 +4,23 @@ import math
 import uuid
 import re
 from typing import List, Dict, Any, Tuple
-from app.services.llm_service import LLMService
+from app.services.llm_service import (
+    LLMService,
+    STOP_WORDS,
+    NOISE_SECTION_MARKERS,
+    SECTION_KEYWORD_EXPANSIONS,
+    CLEAN_WORD_RE,
+    TOKEN_RE,
+    term_matches_words,
+    extract_target_numbered_entity,
+    chunk_contains_target_entity,
+    get_clean_q_terms
+)
 from app.db.supabase_client import get_supabase_client, _in_memory_db
 from app.schemas.chat import Citation, ChatMessageResponse, ComparisonResponse
 from app.core.config import settings
 
 logger = logging.getLogger("docmind")
-
-def term_matches_words(term: str, words: set) -> bool:
-    if term in words:
-        return True
-    if len(term) >= 4:
-        stem = term[:4]
-        if any(w.startswith(stem) for w in words if len(w) >= 4):
-            return True
-        for w in words:
-            if len(w) >= 4 and abs(len(w) - len(term)) <= 2:
-                if difflib.SequenceMatcher(None, term, w).ratio() >= 0.75:
-                    return True
-    return False
 
 def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
     """Calculates cosine similarity between two float vectors."""
@@ -64,6 +62,23 @@ class RAGService:
         citations = []
         if show_sources and is_grounded:
             citations = self._build_citations(supporting_chunks)
+
+        # Diagnostic Trajectory Logger
+        query_scope = self.llm._classify_query_scope(question)
+        final_evidence = self.llm._select_minimal_evidence(question, query_scope, relevant_chunks)
+
+        print("\n================ RAG PIPELINE DIAGNOSTICS ================")
+        print(f"QUESTION: {question} (Scope: {query_scope})")
+        print(f"RAW RETRIEVAL: {len(candidate_chunks)} candidate chunks retrieved")
+        print(f"FILTERED EVIDENCE: {len(relevant_chunks)} relevant chunks after Stage 2 filter")
+        print(f"FINAL EVIDENCE: {len(final_evidence)} selected minimal chunks for scope {query_scope}")
+        context_preview = "\n---\n".join([c.get("content", "")[:120] for c in final_evidence])
+        print(f"CONTEXT SENT TO LLM:\n{context_preview}")
+        print(f"RAW LLM OUTPUT:\n{answer_text}")
+        print(f"ANSWER VALIDATION: evidence_grounded={is_grounded}, answer_relevant={is_grounded}, citation_supported={bool(citations)}")
+        print(f"FINAL ANSWER:\n{answer_text}")
+        print(f"CITATIONS: {[c.document_name + ' Page ' + str(c.page_number) for c in citations]}")
+        print("==========================================================\n")
 
         # Save to chat history
         self._save_message(session_id, "user", question)
@@ -133,8 +148,7 @@ class RAGService:
             if not workspace_chunks:
                 return []
 
-            STOP_WORDS = {"tell", "about", "the", "what", "is", "are", "a", "an", "of", "in", "for", "and", "or", "to", "with", "on", "at", "from", "by", "my", "your", "show", "me", "can", "you", "please", "give", "list", "info", "details", "does", "do", "did", "how", "why", "which"}
-            q_terms = [re.sub(r'[^a-zA-Z0-9]', '', w.lower()) for w in question.split() if re.sub(r'[^a-zA-Z0-9]', '', w.lower()) not in STOP_WORDS and len(re.sub(r'[^a-zA-Z0-9]', '', w.lower())) >= 2 and not re.sub(r'[^a-zA-Z0-9]', '', w.lower()).isdigit()] if question else []
+            q_terms = get_clean_q_terms(question)
 
             scored_chunks = []
             for chunk in workspace_chunks:
@@ -142,7 +156,7 @@ class RAGService:
                 score = cosine_similarity(query_vector, chunk_vec) if chunk_vec else 0.0
                 
                 content_lower = chunk.get("content", "").lower()
-                words = set(re.findall(r'\b[a-zA-Z0-9]+\b', content_lower))
+                words = set(TOKEN_RE.findall(content_lower))
                 
                 has_match = False
                 for term in q_terms:
@@ -161,10 +175,71 @@ class RAGService:
             scored_chunks.sort(key=lambda x: x["similarity"], reverse=True)
             raw_candidates = scored_chunks[:top_k]
 
-        if not raw_candidates:
-            return []
+        query_scope = self.llm._classify_query_scope(question)
 
-        # UNIVERSAL PARENT SECTION & NEIGHBORING CONTEXT EXPANSION
+        if not raw_candidates and query_scope not in ("DOCUMENT_OVERVIEW", "DOCUMENT_META"):
+            return []
+        if query_scope == "FACT_LOOKUP":
+            return raw_candidates[:top_k]
+
+        if query_scope in ("DOCUMENT_OVERVIEW", "DOCUMENT_META"):
+            # Fetch representative chunks across the workspace (e.g. Page 1 header/intro, middle, and conclusion)
+            workspace_all_chunks = []
+            if client:
+                try:
+                    res_db = client.from_("document_chunks") \
+                        .select("*") \
+                        .eq("workspace_id", workspace_id) \
+                        .execute()
+                    if res_db.data:
+                        for chunk in res_db.data:
+                            doc_id = chunk.get("document_id")
+                            doc_rec = _in_memory_db.documents.get(doc_id)
+                            if doc_rec:
+                                chunk["filename"] = doc_rec.get("filename", "Document")
+                        workspace_all_chunks = res_db.data
+                except Exception as e:
+                    logger.warning(f"Supabase all chunks fetch failed: {e}")
+
+            if not workspace_all_chunks:
+                workspace_all_chunks = [dict(c) for c in _in_memory_db.document_chunks if c.get("workspace_id") == workspace_id]
+
+            if workspace_all_chunks:
+                workspace_all_chunks.sort(key=lambda x: (x.get("page_number", 1), x.get("id", "")))
+                non_noise_chunks = [
+                    c for c in workspace_all_chunks
+                    if not any(r in (c.get("parent_section") or "").lower() or r in (c.get("section_path") or "").lower() for r in NOISE_SECTION_MARKERS)
+                ]
+                if not non_noise_chunks:
+                    non_noise_chunks = workspace_all_chunks
+
+                selected = []
+                seen_ids = set()
+
+                # Always prioritize Page 1 chunk(s) containing document title / preamble
+                page1_chunks = [c for c in non_noise_chunks if c.get("page_number", 1) == 1]
+                for c in page1_chunks[:2]:
+                    selected.append(c)
+                    seen_ids.add(c.get("id"))
+
+                for c in raw_candidates:
+                    c_id = c.get("id")
+                    if c_id not in seen_ids:
+                        selected.append(c)
+                        seen_ids.add(c_id)
+
+                if len(selected) < top_k and len(non_noise_chunks) > len(selected):
+                    mid_idx = len(non_noise_chunks) // 2
+                    for c in [non_noise_chunks[mid_idx], non_noise_chunks[-1]]:
+                        if c.get("id") not in seen_ids:
+                            selected.append(c)
+                            seen_ids.add(c.get("id"))
+
+                return selected[:top_k]
+
+            return raw_candidates[:top_k]
+
+        # UNIVERSAL PARENT SECTION & NEIGHBORING CONTEXT EXPANSION (for section / category queries)
         retrieved_ids = {c.get("id") for c in raw_candidates}
         expanded_chunks = list(raw_candidates)
 
@@ -216,7 +291,7 @@ class RAGService:
                         content = c.get("content", "")
                         c_p_sec = c.get("parent_section") or c.get("metadata", {}).get("parent_section")
                         if not c_p_sec and "Section:" in content:
-                            first_line = content.split("\n")[0].replace("Section:", "").strip()
+                            first_line = c.get("content", "").split("\n")[0].replace("Section:", "").strip()
                             c_p_sec = first_line.split(">")[0].strip()
 
                         if c_p_sec and c_p_sec.lower() in top_parent_sections:
@@ -232,13 +307,40 @@ class RAGService:
         if not candidate_chunks:
             return []
 
-        STOP_WORDS = {"tell", "about", "the", "what", "is", "are", "a", "an", "of", "in", "for", "and", "or", "to", "with", "on", "at", "from", "by", "my", "your", "show", "me", "can", "you", "please", "give", "list", "info", "details", "does", "do", "did", "how", "why", "which"}
-        q_terms = [re.sub(r'[^a-zA-Z0-9]', '', w.lower()) for w in question.split() if re.sub(r'[^a-zA-Z0-9]', '', w.lower()) not in STOP_WORDS and len(re.sub(r'[^a-zA-Z0-9]', '', w.lower())) >= 2 and not re.sub(r'[^a-zA-Z0-9]', '', w.lower()).isdigit()]
+        query_scope = self.llm._classify_query_scope(question)
+
+        if query_scope in ("DOCUMENT_OVERVIEW", "DOCUMENT_META", "SECTION_QUERY"):
+            non_noise = [
+                c for c in candidate_chunks
+                if not any(r in (c.get("parent_section") or "").lower() or r in (c.get("section_path") or "").lower() or r in c.get("content", "").lower()[:100] for r in NOISE_SECTION_MARKERS)
+            ]
+            if non_noise:
+                candidate_chunks = non_noise
+
+        if query_scope in ("DOCUMENT_OVERVIEW", "DOCUMENT_META"):
+            return candidate_chunks[:6]
+
+        target_ent = extract_target_numbered_entity(question)
+        if target_ent:
+            ent_type, ent_num = target_ent
+            exact_chunks = [
+                c for c in candidate_chunks
+                if chunk_contains_target_entity(c.get("content", ""), ent_type, ent_num)
+            ]
+            if exact_chunks:
+                return exact_chunks[:5]
+
+        q_terms = get_clean_q_terms(question)
 
         if not q_terms:
-            return candidate_chunks
+            return candidate_chunks[:5]
 
-        # Check if candidate chunks contain direct section header matches for the query terms
+        expanded_q_terms = list(q_terms)
+        for t in q_terms:
+            if t.lower() in SECTION_KEYWORD_EXPANSIONS:
+                expanded_q_terms.extend(SECTION_KEYWORD_EXPANSIONS[t.lower()])
+
+        # Check if candidate chunks contain direct section header matches for the expanded query terms
         header_matched_chunks = []
         for chunk in candidate_chunks:
             p_sec = (chunk.get("parent_section") or chunk.get("metadata", {}).get("parent_section") or "").lower()
@@ -249,7 +351,7 @@ class RAGService:
                 s_path = header.lower()
 
             words_header = set(re.findall(r'\b[a-zA-Z0-9]+\b', f"{p_sec} {s_path}"))
-            if any(term_matches_words(term, words_header) for term in q_terms):
+            if any(term_matches_words(term, words_header) for term in expanded_q_terms):
                 header_matched_chunks.append(chunk)
 
         if header_matched_chunks:
@@ -257,27 +359,26 @@ class RAGService:
             filtered = [
                 c for c in candidate_chunks
                 if (c.get("parent_section") or "").lower() in header_parents
-                or any(term_matches_words(t, set(re.findall(r'\b[a-zA-Z0-9]+\b', (c.get("section_path") or "").lower()))) for t in q_terms)
+                or any(term_matches_words(t, set(re.findall(r'\b[a-zA-Z0-9]+\b', (c.get("section_path") or "").lower()))) for t in expanded_q_terms)
             ]
             return filtered if filtered else header_matched_chunks
 
-        filtered = []
+        scored_candidates = []
         for chunk in candidate_chunks:
             content_lower = chunk.get("content", "").lower()
             words = set(re.findall(r'\b[a-zA-Z0-9]+\b', content_lower))
-            
-            term_matches = 0
-            for term in q_terms:
-                if term_matches_words(term, words):
-                    term_matches += 1
 
-            similarity = chunk.get("similarity", 0.0)
+            term_matches = sum(1 for term in expanded_q_terms if term_matches_words(term, words))
+            sim = chunk.get("similarity", 0.5)
 
-            # Keep chunk if terms match, similarity is sufficient, or if chunk is part of parent section expansion
-            if term_matches > 0 or similarity >= 0.5:
-                filtered.append(chunk)
+            if term_matches > 0 or sim >= 0.45:
+                scored_candidates.append((term_matches, sim, chunk))
 
-        return filtered if filtered else candidate_chunks[:3]
+        if scored_candidates:
+            scored_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+            return [item[2] for item in scored_candidates[:5]]
+
+        return candidate_chunks[:3]
 
     def _get_all_workspace_chunks(self, workspace_id: str, document_ids: List[str] = None) -> List[Dict[str, Any]]:
         chunks = [c for c in _in_memory_db.document_chunks if c.get("workspace_id") == workspace_id]

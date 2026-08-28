@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS public.document_chunks (
     page_number INTEGER NOT NULL CHECK (page_number >= 1),
     chunk_type TEXT NOT NULL DEFAULT 'text' CHECK (chunk_type IN ('text', 'table', 'image_description')),
     content TEXT NOT NULL,
+    section_path TEXT DEFAULT '',
+    parent_section TEXT DEFAULT '',
     embedding vector(768) NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -84,6 +86,8 @@ RETURNS TABLE (
   page_number int,
   chunk_type text,
   content text,
+  section_path text,
+  parent_section text,
   similarity float
 )
 LANGUAGE plpgsql
@@ -97,6 +101,8 @@ BEGIN
     dc.page_number,
     dc.chunk_type,
     dc.content,
+    dc.section_path,
+    dc.parent_section,
     1 - (dc.embedding <=> query_embedding) AS similarity
   FROM public.document_chunks dc
   WHERE dc.workspace_id = filter_workspace_id
