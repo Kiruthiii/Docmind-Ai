@@ -20,6 +20,13 @@ from app.db.supabase_client import get_supabase_client, _in_memory_db
 from app.schemas.chat import Citation, ChatMessageResponse, ComparisonResponse
 from app.core.config import settings
 
+from app.services.agents.query_agent import QueryIntelligenceAgent, StructuredQuery
+from app.services.agents.document_agent import DocumentIntelligenceAgent
+from app.services.agents.retrieval_agent import RetrievalIntelligenceAgent
+from app.services.agents.assembly_agent import EvidenceAssemblyAgent
+from app.services.agents.validation_agent import EvidenceValidationAgent
+from app.services.agents.answer_agent import AnswerIntelligenceAgent
+
 logger = logging.getLogger("docmind")
 
 def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
@@ -34,6 +41,12 @@ def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
 class RAGService:
     def __init__(self):
         self.llm = LLMService()
+        self.query_agent = QueryIntelligenceAgent()
+        self.document_agent = DocumentIntelligenceAgent()
+        self.retrieval_agent = RetrievalIntelligenceAgent()
+        self.assembly_agent = EvidenceAssemblyAgent()
+        self.validation_agent = EvidenceValidationAgent()
+        self.answer_agent = AnswerIntelligenceAgent(self.llm)
 
     def query_workspace(
         self,
@@ -42,43 +55,96 @@ class RAGService:
         session_id: str = None,
         show_sources: bool = True
     ) -> ChatMessageResponse:
-        """Retrieves evidence and generates a grounded response using a 3-stage evidence pipeline."""
+        """Retrieves evidence and generates a grounded response using Multi-Agent Evidence-Sufficiency Pipeline."""
         if not session_id:
             session_id = str(uuid.uuid4())
 
-        # 1. Embed query
+        # 1. Agent 1: Query Intelligence
+        structured_query = self.query_agent.analyze_query(question)
+
+        # 2. Agent 3: Retrieval Intelligence (Candidate Pool)
         query_vector = self.llm.get_embedding(question)
+        candidate_chunks = self.retrieval_agent.retrieve_candidates(
+            workspace_id=workspace_id,
+            structured_query=structured_query,
+            query_vector=query_vector,
+            top_k=settings.MAX_RETRIEVAL_CHUNKS
+        )
 
-        # 2. Stage 1: Candidate Retrieval
-        candidate_chunks = self._retrieve_chunks(workspace_id, query_vector, question=question, top_k=settings.MAX_RETRIEVAL_CHUNKS)
+        # 3. Agent 4: Evidence Assembly
+        assembly_result = self.assembly_agent.assemble_evidence_context(candidate_chunks)
 
-        # 3. Stage 2: Post-Retrieval Semantic Relevance Filtering
-        relevant_chunks = self._filter_relevant_evidence(question, candidate_chunks)
+        # 4. Agent 5: Evidence Validation
+        validation_result = self.validation_agent.validate_evidence(
+            structured_query=structured_query,
+            assembled_chunks=assembly_result["assembled_chunks"],
+            attempt=1,
+            max_attempts=2
+        )
 
-        # 4. Stage 3: Grounded Answer Generation & Answer-Supporting Evidence Extraction
-        answer_text, is_grounded, supporting_chunks = self.llm.generate_grounded_answer(question, relevant_chunks)
+        # 5. Informed Retry / Reformulation Loop if initial evidence check fails
+        retry_triggered = False
+        if not validation_result.sufficient and validation_result.requires_retry:
+            retry_triggered = True
+            missing_info = getattr(validation_result, "missing_information", [])
+            logger.info(f"Initial evidence validation incomplete (Missing: {missing_info}). Triggering Query Reformulation & Retry step.")
+            reformulated_query = self.query_agent.reformulate_query(structured_query, attempt=2, missing_info=missing_info)
+            retry_candidates = self.retrieval_agent.retrieve_candidates(
+                workspace_id=workspace_id,
+                structured_query=reformulated_query,
+                query_vector=query_vector,
+                top_k=settings.MAX_RETRIEVAL_CHUNKS
+            )
+            assembly_result = self.assembly_agent.assemble_evidence_context(retry_candidates)
+            validation_result = self.validation_agent.validate_evidence(
+                structured_query=reformulated_query,
+                assembled_chunks=assembly_result["assembled_chunks"],
+                attempt=2,
+                max_attempts=2
+            )
 
-        # 5. Format Citations STRICTLY from Answer-Supporting Evidence
-        citations = []
-        if show_sources and is_grounded:
-            citations = self._build_citations(supporting_chunks)
+        # 6. Agent 6: Answer Intelligence & Verification
+        if not validation_result.sufficient or validation_result.is_abstention or not validation_result.minimal_evidence:
+            answer_text = "I couldn't find sufficient evidence in the uploaded documents to answer this question."
+            is_grounded = False
+            citations = []
+        else:
+            answer_text, is_grounded, supporting_chunks = self.answer_agent.generate_verified_answer(
+                structured_query=structured_query,
+                validation_result=validation_result,
+                assembled_context_str=assembly_result["context_str"]
+            )
+            citations = self._build_citations(supporting_chunks) if show_sources and is_grounded else []
 
-        # Diagnostic Trajectory Logger
-        query_scope = self.llm._classify_query_scope(question)
-        final_evidence = self.llm._select_minimal_evidence(question, query_scope, relevant_chunks)
+        # Comprehensive Behavioral Diagnostic Matrix Logging
+        diag_matrix = {
+            "original_query": question,
+            "structured_query": {
+                "intent": structured_query.intent,
+                "answer_type": structured_query.answer_type,
+                "information_needed": structured_query.information_needed,
+                "retrieval_scope": structured_query.retrieval_scope,
+                "preferred_sections": structured_query.preferred_sections
+            },
+            "retrieval_strategy": structured_query.retrieval_strategy,
+            "candidate_chunks_count": len(candidate_chunks),
+            "selected_evidence_count": len(validation_result.minimal_evidence),
+            "validation": {
+                "topic_relevant": getattr(validation_result, "topic_relevant", True),
+                "answer_supported": getattr(validation_result, "answer_supported", True),
+                "sufficient": validation_result.sufficient,
+                "missing_information": getattr(validation_result, "missing_information", [])
+            },
+            "retry_triggered": retry_triggered,
+            "final_answer": answer_text,
+            "is_grounded": is_grounded,
+            "citations": [c.document_name + " Page " + str(c.page_number) for c in citations]
+        }
 
-        print("\n================ RAG PIPELINE DIAGNOSTICS ================")
-        print(f"QUESTION: {question} (Scope: {query_scope})")
-        print(f"RAW RETRIEVAL: {len(candidate_chunks)} candidate chunks retrieved")
-        print(f"FILTERED EVIDENCE: {len(relevant_chunks)} relevant chunks after Stage 2 filter")
-        print(f"FINAL EVIDENCE: {len(final_evidence)} selected minimal chunks for scope {query_scope}")
-        context_preview = "\n---\n".join([c.get("content", "")[:120] for c in final_evidence])
-        print(f"CONTEXT SENT TO LLM:\n{context_preview}")
-        print(f"RAW LLM OUTPUT:\n{answer_text}")
-        print(f"ANSWER VALIDATION: evidence_grounded={is_grounded}, answer_relevant={is_grounded}, citation_supported={bool(citations)}")
-        print(f"FINAL ANSWER:\n{answer_text}")
-        print(f"CITATIONS: {[c.document_name + ' Page ' + str(c.page_number) for c in citations]}")
-        print("==========================================================\n")
+        print("\n================ RAG PIPELINE DIAGNOSTIC MATRIX ================")
+        import json
+        print(json.dumps(diag_matrix, indent=2))
+        print("=================================================================\n")
 
         # Save to chat history
         self._save_message(session_id, "user", question)
@@ -116,8 +182,15 @@ class RAGService:
             citations=citations
         )
 
-    def _retrieve_chunks(self, workspace_id: str, query_vector: List[float], question: str = "", top_k: int = 15) -> List[Dict[str, Any]]:
-        """Retrieves top-K chunks with Parent Section Expansion for complete evidence context."""
+    def _retrieve_chunks(
+        self,
+        workspace_id: str,
+        query_vector: List[float],
+        question: str = "",
+        query_intent: Any = None,
+        top_k: int = 15
+    ) -> List[Dict[str, Any]]:
+        """Retrieves top-K chunks with Hybrid Search and Parent Section Expansion."""
         client = get_supabase_client()
         raw_candidates = []
 
@@ -154,10 +227,10 @@ class RAGService:
             for chunk in workspace_chunks:
                 chunk_vec = chunk.get("embedding", [])
                 score = cosine_similarity(query_vector, chunk_vec) if chunk_vec else 0.0
-                
+
                 content_lower = chunk.get("content", "").lower()
                 words = set(TOKEN_RE.findall(content_lower))
-                
+
                 has_match = False
                 for term in q_terms:
                     if term_matches_words(term, words):
@@ -183,7 +256,6 @@ class RAGService:
             return raw_candidates[:top_k]
 
         if query_scope in ("DOCUMENT_OVERVIEW", "DOCUMENT_META"):
-            # Fetch representative chunks across the workspace (e.g. Page 1 header/intro, middle, and conclusion)
             workspace_all_chunks = []
             if client:
                 try:
@@ -216,7 +288,6 @@ class RAGService:
                 selected = []
                 seen_ids = set()
 
-                # Always prioritize Page 1 chunk(s) containing document title / preamble
                 page1_chunks = [c for c in non_noise_chunks if c.get("page_number", 1) == 1]
                 for c in page1_chunks[:2]:
                     selected.append(c)
@@ -239,7 +310,6 @@ class RAGService:
 
             return raw_candidates[:top_k]
 
-        # UNIVERSAL PARENT SECTION & NEIGHBORING CONTEXT EXPANSION (for section / category queries)
         retrieved_ids = {c.get("id") for c in raw_candidates}
         expanded_chunks = list(raw_candidates)
 
@@ -302,10 +372,51 @@ class RAGService:
 
         return expanded_chunks[:top_k]
 
-    def _filter_relevant_evidence(self, question: str, candidate_chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Stage 2: Semantic Relevance Filter with Parent Section Context Preservation."""
+    def _filter_relevant_evidence(
+        self,
+        question: str,
+        candidate_chunks: List[Dict[str, Any]],
+        query_intent: Any = None
+    ) -> List[Dict[str, Any]]:
+        """Stage 2: Structural & Semantic Relevance Filter with Query Intent Awareness."""
         if not candidate_chunks:
             return []
+
+        target_section = getattr(query_intent, "target_section", "any") if query_intent else "any"
+        query_type = getattr(query_intent, "query_type", "specific_fact") if query_intent else "specific_fact"
+
+        # 1. Target Section Filtering (Fixes Bug #1: Discards page 27 / reference section for "introduction" queries)
+        if target_section and target_section != "any":
+            target_sec_lower = target_section.lower()
+            section_matching_chunks = []
+            for c in candidate_chunks:
+                pos = (c.get("document_position") or c.get("metadata", {}).get("document_position") or "").lower()
+                p_sec = (c.get("parent_section") or c.get("metadata", {}).get("parent_section") or "").lower()
+                s_path = (c.get("section_path") or c.get("metadata", {}).get("section_path") or "").lower()
+                content = c.get("content", "").lower()
+                page_num = c.get("page_number", 1)
+
+                is_target_pos = pos == target_sec_lower
+                is_header_match = target_sec_lower in p_sec or target_sec_lower in s_path
+                is_early_intro = (target_sec_lower == "introduction" and page_num <= 3 and "reference" not in pos and "reference" not in p_sec)
+
+                if is_target_pos or is_header_match or is_early_intro:
+                    section_matching_chunks.append(c)
+
+            if section_matching_chunks:
+                candidate_chunks = section_matching_chunks
+
+        # 2. Visual Analysis / Table / Chart Filtering (Fixes Bug #6)
+        if query_type == "visual_analysis" or any(k in question.lower() for k in ["table", "figure", "fig", "chart", "diagram"]):
+            visual_chunks = [
+                c for c in candidate_chunks
+                if c.get("content_type") in ("table", "figure_caption")
+                or c.get("chunk_type") in ("table", "figure_caption")
+                or "table" in c.get("content", "").lower()[:100]
+                or "figure" in c.get("content", "").lower()[:100]
+            ]
+            if visual_chunks:
+                candidate_chunks = visual_chunks
 
         query_scope = self.llm._classify_query_scope(question)
 
@@ -340,7 +451,6 @@ class RAGService:
             if t.lower() in SECTION_KEYWORD_EXPANSIONS:
                 expanded_q_terms.extend(SECTION_KEYWORD_EXPANSIONS[t.lower()])
 
-        # Check if candidate chunks contain direct section header matches for the expanded query terms
         header_matched_chunks = []
         for chunk in candidate_chunks:
             p_sec = (chunk.get("parent_section") or chunk.get("metadata", {}).get("parent_section") or "").lower()

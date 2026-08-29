@@ -1,5 +1,12 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
+
+class QueryIntent(BaseModel):
+    query_type: Literal["overview", "specific_fact", "comparison", "visual_analysis", "methodology", "location_based"]
+    target_section: Optional[Literal["introduction", "methodology", "results", "conclusion", "references", "any"]] = "any"
+    entities: List[str] = Field(default_factory=list)
+    temporal_context: Optional[str] = None
+    requires_synthesis: bool = False
 
 class Citation(BaseModel):
     document_id: str
