@@ -55,11 +55,22 @@ class IngestionService:
                     "workspace_id": workspace_id,
                     "page_number": chunk.page_number,
                     "chunk_type": chunk.chunk_type,
+                    "content_type": getattr(chunk, "content_type", "text"),
+                    "document_position": getattr(chunk, "document_position", "general"),
+                    "section_hierarchy": getattr(chunk, "section_hierarchy", []),
                     "content": chunk.content,
                     "section_path": getattr(chunk, "section_path", ""),
                     "parent_section": getattr(chunk, "parent_section", ""),
                     "embedding": vector,
-                    "filename": filename
+                    "filename": filename,
+                    "metadata": getattr(chunk, "metadata", {}) or {
+                        "filename": filename,
+                        "page_number": chunk.page_number,
+                        "parent_section": getattr(chunk, "parent_section", ""),
+                        "content_type": getattr(chunk, "content_type", "text"),
+                        "document_position": getattr(chunk, "document_position", "general"),
+                        "section_hierarchy": getattr(chunk, "section_hierarchy", [])
+                    }
                 }
 
                 chunks_to_insert.append(chunk_record)
@@ -77,6 +88,7 @@ class IngestionService:
 
             # 4. Mark status ready
             doc_record["status"] = "ready"
+            doc_record["metadata"] = getattr(parse_result, "doc_metadata", {})
             if client:
                 try:
                     client.table("documents").update({"status": "ready", "page_count": parse_result.page_count}).eq("id", doc_id).execute()
