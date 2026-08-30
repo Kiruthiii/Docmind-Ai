@@ -1,0 +1,142 @@
+@import "tailwindcss";
+
+@theme {
+  --color-docmind-bg: #F8F7FC;
+  --color-docmind-warm: #F5F2EC;
+  --color-docmind-surface: #FFFFFF;
+  --color-docmind-charcoal: #1E1B24;
+  --color-docmind-muted: #716B78;
+  --color-docmind-lavender: #EDE7FA;
+  --color-docmind-violet: #7C3AED;
+  --color-docmind-violet-deep: #5B21B6;
+  --color-docmind-green: #15803D;
+  --color-docmind-error: #DC2626;
+
+  --font-serif: 'Newsreader', Georgia, Cambria, serif;
+  --font-sans: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+:root {
+  --bg-primary: #F8F7FC;
+  --bg-warm: #F5F2EC;
+  --bg-surface: #FFFFFF;
+  --text-charcoal: #1E1B24;
+  --text-muted: #716B78;
+  --accent-lavender: #EDE7FA;
+  --primary-violet: #7C3AED;
+  --deep-violet: #5B21B6;
+  --grounded-green: #15803D;
+  --error-red: #DC2626;
+}
+
+/* Custom Base Styles */
+html {
+  scroll-behavior: smooth;
+  font-family: var(--font-sans);
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-charcoal);
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+/* Custom Typography Utilities */
+.font-editorial {
+  font-family: 'Newsreader', Georgia, serif;
+  font-style: italic;
+}
+
+.heading-editorial {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+/* Custom Component Utilities */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(30, 27, 36, 0.08);
+}
+
+.card-paper {
+  background: #FFFFFF;
+  border: 1px solid rgba(30, 27, 36, 0.08);
+  box-shadow: 0 4px 20px -2px rgba(30, 27, 36, 0.04), 0 2px 6px -1px rgba(30, 27, 36, 0.02);
+}
+
+.shadow-editorial {
+  box-shadow: 0 20px 40px -15px rgba(124, 58, 237, 0.07), 0 0 1px 1px rgba(30, 27, 36, 0.06);
+}
+
+.shadow-grounded {
+  box-shadow: 0 10px 30px -10px rgba(21, 128, 61, 0.12);
+}
+
+/* Document & Evidence Highlight Animations */
+@keyframes highlightPulse {
+  0% {
+    background-color: rgba(237, 231, 250, 0.3);
+    border-left-color: rgba(124, 58, 237, 0.2);
+  }
+  50% {
+    background-color: rgba(237, 231, 250, 0.95);
+    border-left-color: rgba(124, 58, 237, 1);
+  }
+  100% {
+    background-color: rgba(237, 231, 250, 0.6);
+    border-left-color: rgba(124, 58, 237, 0.8);
+  }
+}
+
+.highlight-active {
+  animation: highlightPulse 3s ease-in-out infinite;
+  border-left: 3px solid #7C3AED;
+}
+
+@keyframes floatSoft {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+.animate-float {
+  animation: floatSoft 6s ease-in-out infinite;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F8F7FC;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D8D3E6;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #7C3AED;
+}
+
+/* Prefers Reduced Motion Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
