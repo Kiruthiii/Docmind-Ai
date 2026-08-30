@@ -15,13 +15,16 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
     
+    # Auth Security
+    AUTH_ALLOW_DEV_FALLBACK: bool = False
+    
     # Ingestion settings
     CHUNK_SIZE: int = 500
     CHUNK_OVERLAP: int = 100
     MAX_RETRIEVAL_CHUNKS: int = 15
     SIMILARITY_THRESHOLD: float = 0.1  # Set to 0.1 for high recall
     
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=(".env", "backend/.env", "../.env"), extra="ignore")
 
 settings = Settings()
 
