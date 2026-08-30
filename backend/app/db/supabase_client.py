@@ -11,6 +11,7 @@ class InMemoryDatabase:
     def __init__(self):
         self.workspaces: Dict[str, Dict[str, Any]] = {}
         self.documents: Dict[str, Dict[str, Any]] = {}
+        self.pdf_bytes: Dict[str, bytes] = {}
         self.document_chunks: List[Dict[str, Any]] = []
         self.chat_sessions: Dict[str, Dict[str, Any]] = {}
         self.messages: List[Dict[str, Any]] = []

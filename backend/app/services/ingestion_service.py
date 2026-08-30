@@ -37,17 +37,21 @@ class IngestionService:
         
         # Save to memory fallback
         _in_memory_db.documents[doc_id] = doc_record
+        _in_memory_db.pdf_bytes[doc_id] = pdf_bytes
 
         try:
             # 2. Parse PDF and extract text/tables
             parse_result = self.parser.parse_pdf_bytes(pdf_bytes, filename)
             doc_record["page_count"] = parse_result.page_count
 
-            # 3. Generate embeddings & insert chunks
+            # 3. Generate embeddings in batch & insert chunks
             chunks_to_insert = []
-            for chunk in parse_result.chunks:
+            chunk_contents = [chunk.content for chunk in parse_result.chunks]
+            embeddings = self.llm.get_embeddings_batch(chunk_contents) if chunk_contents else []
+
+            for idx, chunk in enumerate(parse_result.chunks):
                 chunk_id = str(uuid.uuid4())
-                vector = self.llm.get_embedding(chunk.content)
+                vector = embeddings[idx] if idx < len(embeddings) else self.llm._mock_embedding(chunk.content)
 
                 chunk_record = {
                     "id": chunk_id,
