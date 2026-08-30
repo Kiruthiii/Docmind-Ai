@@ -1,0 +1,80 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 6 0 R /Resources << /Font << /F1 9 0 R >> >> >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 7 0 R /Resources << /Font << /F1 9 0 R >> >> >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 8 0 R /Resources << /Font << /F1 9 0 R >> >> >>
+endobj
+6 0 obj
+<< /Length 350 >>
+stream
+BT
+/F1 12 Tf
+14 TL
+50 720 Td
+(DocMind AI -- Research Paper Benchmark) '
+(Document Ingestion & Multi-Head Attention Verification) '
+() '
+(Page 1 Overview) '
+(This sample document demonstrates grounded vector retrieval and citation jumping.) '
+(DocMind AI processes multi-page PDFs with real layout rendering and page-level evidence highlighting.) '
+ET
+endstream
+endobj
+7 0 obj
+<< /Length 282 >>
+stream
+BT
+/F1 12 Tf
+14 TL
+50 720 Td
+(Page 2 -- Empirical Metrics) '
+(ResNet-101 model achieved 96.1% accuracy on ImageNet dataset.) '
+(Vision Transformer \(ViT-H/14\) achieved 88.55% Top-1 accuracy.) '
+(All benchmark tests verified under zero-hallucination grounded RAG verification.) '
+ET
+endstream
+endobj
+8 0 obj
+<< /Length 149 >>
+stream
+BT
+/F1 12 Tf
+14 TL
+50 720 Td
+(Page 3 -- Citation Summary) '
+(Grounding accuracy: 99.4%) '
+(Citation latency: < 50ms) '
+(End of sample document.) '
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000253 00000 n 
+0000000379 00000 n 
+0000000505 00000 n 
+0000000906 00000 n 
+0000001239 00000 n 
+0000001439 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R >>
+startxref
+1509
+%%EOF
