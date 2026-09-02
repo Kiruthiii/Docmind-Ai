@@ -112,6 +112,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
+  // Clean up split words from PDF text extraction (e.g. "V ehicle" -> "Vehicle", "T raffic" -> "Traffic")
+  const cleanTextFormatting = (text?: string): string => {
+    if (!text) return '';
+    return text
+      .replace(/\b([A-Za-z])\s+([a-z]{2,})\b/g, '$1$2')
+      .replace(/\b([A-Z]{3,})\s+([A-Z])\b/g, '$1$2')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+
+  // Format document filenames cleanly without wrapping ugly titles across multiple lines
+  const formatDocDisplayTitle = (filename?: string): string => {
+    if (!filename) return '';
+    const cleanName = filename.replace(/\.pdf$/i, '').replace(/_/g, ' ');
+    return cleanName;
+  };
+
   // Helper to render message text with clickable [Page X] citation badges and evidence list
   const renderMessageContent = (msg: ChatMessage) => {
     if (msg.sender === 'user') {
@@ -158,19 +175,54 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <span className="text-[10px] font-mono text-[#716B78] uppercase tracking-wider font-bold block">
               GROUNDED EVIDENCE CITATIONS:
             </span>
-            <div className="flex flex-wrap gap-1.5">
-              {msg.citations.map((cite) => (
-                <button
-                  key={cite.id}
-                  type="button"
-                  onClick={() => onCitationClick(cite)}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#EDE7FA] hover:bg-[#7C3AED] text-[#5B21B6] hover:text-white font-mono text-[11px] font-bold border border-[#7C3AED]/30 transition-all cursor-pointer shadow-2xs focus:outline-none focus-visible:ring-2 focus-visible:ring-[#7C3AED]"
-                  title={cite.snippet || `Jump to Page ${cite.page_number}`}
-                >
-                  <BookOpen className="w-3 h-3 shrink-0" />
-                  <span>{cite.document_name ? `${cite.document_name} — ` : ''}Page {cite.page_number}</span>
-                </button>
-              ))}
+            <div className="flex flex-wrap gap-2">
+              {msg.citations.map((cite) => {
+                const cleanedSnippet = cleanTextFormatting(cite.snippet);
+                const displayDocName = formatDocDisplayTitle(cite.document_name);
+
+                return (
+                  <div key={cite.id} className="relative group/cite inline-block max-w-full">
+                    <button
+                      type="button"
+                      onClick={() => onCitationClick(cite)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#EDE7FA] hover:bg-[#7C3AED] text-[#5B21B6] hover:text-white font-mono text-[11px] font-bold border border-[#7C3AED]/30 transition-all cursor-pointer shadow-2xs focus:outline-none focus-visible:ring-2 focus-visible:ring-[#7C3AED] max-w-full text-left"
+                    >
+                      <BookOpen className="w-3.5 h-3.5 shrink-0 text-[#7C3AED] group-hover/cite:text-white transition-colors" />
+                      {displayDocName && (
+                        <span
+                          className="truncate max-w-[180px] sm:max-w-[240px] inline-block font-sans font-semibold"
+                        >
+                          {displayDocName}
+                        </span>
+                      )}
+                      <span className="shrink-0 font-mono font-bold">
+                        {displayDocName ? ' — ' : ''}Page {cite.page_number}
+                      </span>
+                    </button>
+
+                    {/* Custom Sleek Hover Tooltip (Replaces ugly native browser title overlay) */}
+                    {cleanedSnippet && (
+                      <div className="pointer-events-none absolute bottom-full left-0 mb-2 hidden group-hover/cite:block z-50 w-72 sm:w-80 p-3 bg-[#1E1B24] text-white rounded-xl shadow-xl border border-white/10 text-[11px] font-sans animate-in fade-in zoom-in-95 duration-150">
+                        <div className="flex items-center justify-between gap-1 text-[9px] font-mono text-[#A78BFA] uppercase tracking-wider font-bold mb-1 border-b border-white/10 pb-1">
+                          <span className="flex items-center gap-1">
+                            <BookOpen className="w-3 h-3 text-[#A78BFA]" />
+                            Passage Excerpt &bull; Page {cite.page_number}
+                          </span>
+                          {cite.section_title && (
+                            <span className="truncate max-w-[120px] text-white/70">
+                              {cleanTextFormatting(cite.section_title)}
+                            </span>
+                          )}
+                        </div>
+                        <p className="line-clamp-3 leading-snug italic text-white/90 font-serif">
+                          &ldquo;{cleanedSnippet}&rdquo;
+                        </p>
+                        <div className="absolute -bottom-1 left-5 w-2.5 h-2.5 bg-[#1E1B24] rotate-45 border-r border-b border-white/10" />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

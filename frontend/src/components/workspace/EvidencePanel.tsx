@@ -75,6 +75,19 @@ export const EvidencePanel: React.FC<EvidencePanelProps> = ({
 
             {citations.map((cite) => {
               const isActive = cite.id === activeCitationId;
+              const cleanSnippet = (cite.snippet || '')
+                .replace(/\b([A-Za-z])\s+([a-z]{2,})\b/g, '$1$2')
+                .replace(/\b([A-Z]{3,})\s+([A-Z])\b/g, '$1$2')
+                .replace(/\s+/g, ' ')
+                .trim();
+              const cleanSection = cite.section_title
+                ? cite.section_title
+                    .replace(/\b([A-Za-z])\s+([a-z]{2,})\b/g, '$1$2')
+                    .replace(/\b([A-Z]{3,})\s+([A-Z])\b/g, '$1$2')
+                    .replace(/\s+/g, ' ')
+                    .trim()
+                : null;
+
               return (
                 <div
                   key={cite.id}
@@ -100,9 +113,9 @@ export const EvidencePanel: React.FC<EvidencePanelProps> = ({
                   </div>
 
                   {/* Section Title if available */}
-                  {cite.section_title && (
+                  {cleanSection && (
                     <div className="text-xs font-bold text-[#1E1B24] font-sans">
-                      {cite.section_title}
+                      {cleanSection}
                     </div>
                   )}
 
@@ -112,14 +125,14 @@ export const EvidencePanel: React.FC<EvidencePanelProps> = ({
                       SOURCE PASSAGE:
                     </span>
                     <p className="text-xs font-serif text-[#2D2A35] leading-relaxed italic">
-                      &ldquo;{cite.snippet}&rdquo;
+                      &ldquo;{cleanSnippet}&rdquo;
                     </p>
                   </div>
 
                   {/* Document Source Metadata & Action */}
                   <div className="flex items-center justify-between pt-1 text-[10px] font-mono text-[#716B78]">
                     <span className="truncate max-w-[160px]" title={cite.document_name}>
-                      {cite.document_name}
+                      {cite.document_name ? cite.document_name.replace(/\.pdf$/i, '').replace(/_/g, ' ') : ''}
                     </span>
 
                     <Button
