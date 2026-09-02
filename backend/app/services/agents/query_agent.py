@@ -115,13 +115,22 @@ class QueryIntelligenceAgent:
             elif "project" in q_lower:
                 preferred_sections = ["Projects"]
 
-        # E. Document Metadata queries (Title, Authors, Publication Date, DOI)
-        elif re.search(r'\b(?:what\s+is\s+the\s+title|paper\s+called|title\s+of\s+the\s+paper|paper\s+title|who\s+wrote|who\s+are\s+the\s+authors|published|publication\s+date)\b', q_lower):
-            intent = "FACT_LOOKUP"
+        # E. Author & Contributor Queries
+        elif re.search(r'\b(?:who\s+(?:are|is)\s+(?:the\s+)?authors?|who\s+(?:wrote|authored|created)|authors?\s+of|written\s+by|contributors?|list\s+(?:the\s+)?authors)\b', q_lower):
+            intent = "DOCUMENT_OVERVIEW"
+            answer_type = "LIST"
+            scope = "DOCUMENT_LEVEL"
+            requirement = "MULTI_SECTION"
+            strategy = "OVERVIEW"
+            preferred_sections = ["Header", "Title", "Introduction", "Abstract"]
+
+        # F. Document Title, Date, & Metadata Queries
+        elif re.search(r'\b(?:what\s+is\s+the\s+title|paper\s+called|title\s+of\s+the\s+paper|paper\s+title|published|publication\s+date|doi)\b', q_lower):
+            intent = "DOCUMENT_OVERVIEW"
             answer_type = "DATE" if "published" in q_lower or "date" in q_lower else "FACT"
-            scope = "LOCAL"
+            scope = "DOCUMENT_LEVEL"
             requirement = "SINGLE_OR_FEW_CHUNKS"
-            strategy = "TARGETED"
+            strategy = "OVERVIEW"
             preferred_sections = ["Header", "Title", "Introduction"]
 
         # F. Methodology queries

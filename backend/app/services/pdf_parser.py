@@ -125,7 +125,11 @@ class PDFParser:
         for page_idx in range(page_count):
             page_num = page_idx + 1
             pypdf_page = reader.pages[page_idx]
-            text = (pypdf_page.extract_text() or "").strip()
+            raw_text = (pypdf_page.extract_text() or "").strip()
+            # Clean up split words (e.g., "V ehicle" -> "Vehicle", "Im pact" -> "Impact")
+            text = re.sub(r'(\w+)-\s*\n\s*(\w+)', r'\1\2', raw_text)
+            text = re.sub(r'\b([A-Za-z])\s+([a-z]{2,})\b', r'\1\2', text)
+            text = re.sub(r'\b([A-Z]{3,})\s+([A-Z])\b', r'\1\2', text)
 
             # Check if page has images / low text
             images_on_page = getattr(pypdf_page, 'images', [])
@@ -255,9 +259,17 @@ class PDFParser:
             meta["publication_date"] = date_match.group(1)
 
         # 3. Authors
-        author_match = re.search(r'\b(?:by|authors|author)\s*:?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+(?:\s*,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)*)', page1_text, re.IGNORECASE)
+        author_match = re.search(r'\b(?:by|authors?)\s*:?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+(?:\s*(?:,|and)\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)*)', page1_text, re.IGNORECASE)
         if author_match:
             meta["authors"] = author_match.group(1)
+        else:
+            cand_authors = []
+            for line in lines[1:7]:
+                l_clean = re.sub(r'[\d\*\†\‡\§\$\#]', '', line).strip()
+                if re.match(r'^(?:[A-Z][a-zA-Z\.\-]+\s+)+[A-Z][a-zA-Z\.\-]+(?:\s*,\s*(?:[A-Z][a-zA-Z\.\-]+\s+)+[A-Z][a-zA-Z\.\-]+)*(?:\s*and\s+(?:[A-Z][a-zA-Z\.\-]+\s+)+[A-Z][a-zA-Z\.\-]+)?$', l_clean):
+                    cand_authors.append(l_clean)
+            if cand_authors:
+                meta["authors"] = ", ".join(cand_authors)
 
         # 4. Title
         for line in lines[:8]:
@@ -303,6 +315,20 @@ class PDFParser:
             return []
 
         structured_chunks = []
+
+        # Unified Page 1 Document Header & Author Metadata chunk
+        if page_number == 1:
+            header_preamble = "\n".join(raw_lines[:20]).strip()
+            if header_preamble:
+                structured_chunks.append({
+                    "content": f"Section: Document Header & Author Metadata\n{header_preamble}",
+                    "section_path": "Document Header & Author Metadata",
+                    "parent_section": "Document Header",
+                    "section_hierarchy": ["Document Header"],
+                    "document_position": "introduction",
+                    "content_type": "header",
+                    "chunk_type": "header"
+                })
         current_parent = "General"
         current_sub = ""
         current_lines = []

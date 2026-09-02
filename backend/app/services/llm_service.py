@@ -12,7 +12,7 @@ from app.schemas.chat import GroundedAnswerSchema, Claim, QueryIntent
 logger = logging.getLogger("docmind")
 
 STOP_WORDS = frozenset({"tell", "about", "the", "what", "is", "are", "a", "an", "of", "in", "for", "and", "or", "to", "with", "on", "at", "from", "by", "my", "your", "show", "me", "can", "you", "please", "give", "list", "info", "details", "does", "do", "did", "how", "why", "which"})
-NOISE_SECTION_MARKERS = frozenset({"reference", "bibliography", "citation", "author", "biography", "doi:"})
+NOISE_SECTION_MARKERS = frozenset({"reference", "bibliography", "citation", "biography", "doi:"})
 
 SECTION_KEYWORD_EXPANSIONS = {
     "methodology": ["methodology", "method", "proposed", "architecture", "algorithm", "pipeline", "framework", "approach", "system", "design"],
@@ -375,7 +375,7 @@ class LLMService:
                 c for c in context_chunks
                 if not any(r in (c.get("parent_section") or "").lower() or r in (c.get("section_path") or "").lower() for r in NOISE_SECTION_MARKERS)
             ]
-            return non_ref_chunks[:5] if non_ref_chunks else context_chunks[:4]
+            return non_ref_chunks[:8] if non_ref_chunks else context_chunks[:6]
 
         if scope in ("TABLE_QUERY", "VISUAL_QUERY"):
             marker = "table" if scope == "TABLE_QUERY" else "fig"

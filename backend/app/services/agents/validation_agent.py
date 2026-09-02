@@ -133,16 +133,16 @@ class EvidenceValidationAgent:
             if matched_sec_chunks:
                 assembled_chunks = matched_sec_chunks
 
-        # 3. For title, author, publication date, or header queries, prioritize chunk_type=="header"
-        if any(k in q_low for k in ["title", "author", "authors", "published", "publication date"]):
-            header_chunks = [c for c in assembled_chunks if c.get("chunk_type") == "header" or c.get("content_type") == "header"]
+        # 3. For title, author, authors, publication date, or header queries, pool all header & page 1 chunks
+        if any(k in q_low for k in ["title", "author", "authors", "published", "publication date", "who wrote", "who authored"]):
+            header_chunks = [c for c in assembled_chunks if c.get("chunk_type") == "header" or c.get("content_type") == "header" or c.get("page_number", 1) == 1]
             if not header_chunks:
-                header_chunks = [c for c in assembled_chunks if c.get("page_number", 1) == 1]
+                header_chunks = [c for c in assembled_chunks if c.get("page_number", 1) <= 2]
             if header_chunks:
                 return ValidationResult(
                     sufficient=True,
                     relevance_score=0.98,
-                    minimal_evidence=header_chunks[:2],
+                    minimal_evidence=header_chunks[:8],
                     requires_retry=False,
                     is_abstention=False,
                     topic_relevant=True,
