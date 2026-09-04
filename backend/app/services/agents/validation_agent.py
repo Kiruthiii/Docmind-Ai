@@ -1,15 +1,14 @@
-import re
 import logging
-from typing import List, Dict, Any, Tuple
+import re
+from typing import Any, Dict, List, Tuple
+
 from pydantic import BaseModel, Field
+
 from app.services.agents.query_agent import StructuredQuery
-from app.services.llm_service import (
-    STOP_WORDS,
-    TOKEN_RE,
-    term_matches_words,
-    extract_target_numbered_entity,
-    chunk_contains_target_entity
-)
+from app.services.llm_service import (STOP_WORDS, TOKEN_RE,
+                                      chunk_contains_target_entity,
+                                      extract_target_numbered_entity,
+                                      term_matches_words)
 
 logger = logging.getLogger("docmind")
 

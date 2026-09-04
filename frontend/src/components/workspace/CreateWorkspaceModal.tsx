@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+
 import { X, FolderPlus, Loader2, AlertCircle } from 'lucide-react';
+
 import { Button } from '../ui/Button';
 
 interface CreateWorkspaceModalProps {

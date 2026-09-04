@@ -1,9 +1,10 @@
 import logging
 import uuid
-from typing import Dict, Any, List
-from app.services.pdf_parser import PDFParser
+from typing import Any, Dict, List
+
+from app.db.supabase_client import _in_memory_db, get_supabase_client
 from app.services.llm_service import LLMService
-from app.db.supabase_client import get_supabase_client, _in_memory_db
+from app.services.pdf_parser import PDFParser
 
 logger = logging.getLogger("docmind")
 

@@ -1,5 +1,6 @@
 import os
 
+
 def create_sample_pdf(filepath: str = "backend/tests/fixtures/sample_paper.pdf"):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     # Minimal valid PDF file

@@ -1,5 +1,7 @@
-from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
 
 class WorkspaceCreate(BaseModel):
     name: str = Field(..., json_schema_extra={"example": "Machine Learning Research"})

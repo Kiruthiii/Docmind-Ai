@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+
 import {
   FileUp,
   FolderPlus,
@@ -13,13 +14,14 @@ import {
   Layers,
   Scale,
 } from 'lucide-react';
-import { Button } from '../ui/Button';
-import { Badge } from '../ui/Badge';
-import { DocumentReader } from './DocumentReader';
-import { ChatInterface } from './ChatInterface';
-import { EvidencePanel } from './EvidencePanel';
-import type { WorkspaceItem } from './WorkspaceSidebar';
+
 import type { DocumentItem, ChatMessage, Citation } from '../../types/docmind';
+import type { WorkspaceItem } from './WorkspaceSidebar';
+import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
+import { ChatInterface } from './ChatInterface';
+import { DocumentReader } from './DocumentReader';
+import { EvidencePanel } from './EvidencePanel';
 
 interface WorkspaceMainProps {
   activeWorkspace: WorkspaceItem | null;

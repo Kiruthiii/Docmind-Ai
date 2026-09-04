@@ -1,8 +1,11 @@
 import uuid
+
 import pytest
-from app.services.rag_service import RAGService
+
 from app.db.supabase_client import _in_memory_db
 from app.schemas.chat import ChatMessageResponse
+from app.services.rag_service import RAGService
+
 
 @pytest.fixture
 def sample_workspace():

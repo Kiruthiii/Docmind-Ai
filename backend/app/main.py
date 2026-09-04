@@ -1,9 +1,10 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 import logging
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.api import chat, documents, workspaces
 from app.core.config import settings
-from app.api import workspaces, documents, chat
 
 logging.basicConfig(
     level=logging.INFO,
@@ -11,10 +12,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("docmind")
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from fastapi import Request, Response
 import json
 import re
+
+from fastapi import Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+
 
 class JSONControlCharMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):

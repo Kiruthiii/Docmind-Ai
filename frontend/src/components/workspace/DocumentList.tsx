@@ -1,7 +1,9 @@
 import React from 'react';
+
 import { FileText, Plus, FileCode2, CheckCircle2, Clock, AlertCircle, Loader2, Trash2 } from 'lucide-react';
-import { Badge } from '../ui/Badge';
+
 import type { DocumentItem } from '../../types/docmind';
+import { Badge } from '../ui/Badge';
 
 interface DocumentListProps {
   documents?: DocumentItem[];

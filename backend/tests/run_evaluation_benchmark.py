@@ -1,14 +1,14 @@
 import logging
-import uuid
-import sys
 import os
+import sys
+import uuid
 
 # Ensure backend path is in sys.path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.services.rag_service import RAGService
-from app.services.ingestion_service import IngestionService
 from app.db.supabase_client import _in_memory_db
+from app.services.ingestion_service import IngestionService
+from app.services.rag_service import RAGService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("docmind-eval")

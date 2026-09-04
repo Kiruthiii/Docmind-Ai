@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
-import { Link, useNavigate, Navigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+
 import { BookOpen, FileText, ArrowRight, ShieldCheck, AlertCircle, Loader2, CheckCircle2, Eye, EyeOff, XCircle } from 'lucide-react';
-import { Button } from '../components/ui/Button';
+import { Link, useNavigate, Navigate } from 'react-router-dom';
+
 import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
+import { useAuth } from '../context/AuthContext';
 
 export const SignupPage: React.FC = () => {
   const { session, signUp } = useAuth();

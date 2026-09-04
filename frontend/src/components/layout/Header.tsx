@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
+
 import { Link } from 'react-router-dom';
 import { Menu, X, ArrowRight, BookOpen } from 'lucide-react';
+
 import { Button } from '../ui/Button';
 
 export const Header: React.FC = () => {

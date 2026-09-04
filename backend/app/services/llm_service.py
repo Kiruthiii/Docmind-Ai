@@ -1,13 +1,15 @@
-import logging
+import difflib
 import hashlib
 import json
-import difflib
+import logging
 import re
-from typing import List, Dict, Any, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
 from google import genai
 from google.genai import types
+
 from app.core.config import settings
-from app.schemas.chat import GroundedAnswerSchema, Claim, QueryIntent
+from app.schemas.chat import Claim, GroundedAnswerSchema, QueryIntent
 
 logger = logging.getLogger("docmind")
 

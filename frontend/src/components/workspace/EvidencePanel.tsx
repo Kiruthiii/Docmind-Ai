@@ -1,4 +1,5 @@
 import React from 'react';
+
 import {
   ShieldCheck,
   ExternalLink,
@@ -6,9 +7,10 @@ import {
   Sparkles,
   Layers,
 } from 'lucide-react';
-import { Button } from '../ui/Button';
-import { Badge } from '../ui/Badge';
+
 import type { Citation } from '../../types/docmind';
+import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
 
 interface EvidencePanelProps {
   citations: Citation[];

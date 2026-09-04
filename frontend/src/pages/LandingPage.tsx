@@ -1,13 +1,14 @@
 import React from 'react';
-import { Header } from '../components/layout/Header';
+
+import { FinalCTASection } from '../components/landing/FinalCTASection';
 import { Footer } from '../components/layout/Footer';
+import { Header } from '../components/layout/Header';
 import { HeroSection } from '../components/landing/HeroSection';
+import { HowItWorksSection } from '../components/landing/HowItWorksSection';
 import { MasterDocumentStage } from '../components/visuals/MasterDocumentStage';
 import { ProblemSection } from '../components/landing/ProblemSection';
-import { HowItWorksSection } from '../components/landing/HowItWorksSection';
-import { UseCasesSection } from '../components/landing/UseCasesSection';
 import { ProductRevealSection } from '../components/landing/ProductRevealSection';
-import { FinalCTASection } from '../components/landing/FinalCTASection';
+import { UseCasesSection } from '../components/landing/UseCasesSection';
 
 export const LandingPage: React.FC = () => {
   return (

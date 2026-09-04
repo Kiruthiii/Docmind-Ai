@@ -1,19 +1,16 @@
-import math
 import logging
+import math
 import re
-from typing import List, Dict, Any, Optional
-from app.services.agents.query_agent import StructuredQuery
-from app.db.supabase_client import get_supabase_client, _in_memory_db
+from typing import Any, Dict, List, Optional
+
 from app.core.config import settings
-from app.services.llm_service import (
-    STOP_WORDS,
-    NOISE_SECTION_MARKERS,
-    SECTION_KEYWORD_EXPANSIONS,
-    TOKEN_RE,
-    term_matches_words,
-    extract_target_numbered_entity,
-    chunk_contains_target_entity
-)
+from app.db.supabase_client import _in_memory_db, get_supabase_client
+from app.services.agents.query_agent import StructuredQuery
+from app.services.llm_service import (NOISE_SECTION_MARKERS,
+                                      SECTION_KEYWORD_EXPANSIONS, STOP_WORDS,
+                                      TOKEN_RE, chunk_contains_target_entity,
+                                      extract_target_numbered_entity,
+                                      term_matches_words)
 
 logger = logging.getLogger("docmind")
 

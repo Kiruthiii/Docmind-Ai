@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAuth } from '../context/AuthContext';
-import { workspaceApi, documentApi } from '../services/api';
+
+import type { DocumentItem, ChatMessage } from '../types/docmind';
 import { AppHeader } from '../components/workspace/AppHeader';
-import { WorkspaceSidebar, type WorkspaceItem } from '../components/workspace/WorkspaceSidebar';
-import { WorkspaceMain } from '../components/workspace/WorkspaceMain';
+import { ComparisonModal } from '../components/workspace/ComparisonModal';
 import { CreateWorkspaceModal } from '../components/workspace/CreateWorkspaceModal';
 import { PdfUploadModal } from '../components/workspace/PdfUploadModal';
-import { ComparisonModal } from '../components/workspace/ComparisonModal';
-import type { DocumentItem, ChatMessage } from '../types/docmind';
+import { WorkspaceMain } from '../components/workspace/WorkspaceMain';
+import { WorkspaceSidebar, type WorkspaceItem } from '../components/workspace/WorkspaceSidebar';
+import { useAuth } from '../context/AuthContext';
+import { workspaceApi, documentApi } from '../services/api';
 
 export const AppWorkspacePage: React.FC = () => {
   const { user, signOut } = useAuth();

@@ -1,5 +1,7 @@
 import { useState } from 'react';
+
 import { FileText, Plus, Send, ShieldCheck, Sparkles, ChevronRight } from 'lucide-react';
+
 import { Badge } from '../ui/Badge';
 
 export const ProductRevealSection: React.FC = () => {

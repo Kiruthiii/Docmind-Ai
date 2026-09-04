@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException, status, Depends
-from typing import List, Dict, Any
 import uuid
+from typing import Any, Dict, List
 
-from app.schemas.workspace import WorkspaceCreate, WorkspaceResponse
-from app.db.supabase_client import get_supabase_client, _in_memory_db
+from fastapi import APIRouter, Depends, HTTPException, status
+
 from app.api.deps import get_current_user
+from app.db.supabase_client import _in_memory_db, get_supabase_client
+from app.schemas.workspace import WorkspaceCreate, WorkspaceResponse
 
 router = APIRouter(prefix="/workspaces", tags=["Workspaces"])
 

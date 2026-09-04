@@ -1,8 +1,10 @@
-from supabase import create_client, Client
-from app.core.config import settings
 import logging
 import uuid
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
+
+from supabase import Client, create_client
+
+from app.core.config import settings
 
 logger = logging.getLogger("docmind")
 

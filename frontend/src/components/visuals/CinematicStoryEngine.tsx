@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
+
 import { Search, ShieldCheck, Sparkles, CheckCircle2, FileText, ExternalLink, Eye, Layers, ChevronDown } from 'lucide-react';
+
 import { Badge } from '../ui/Badge';
 
 export const CinematicStoryEngine: React.FC = () => {

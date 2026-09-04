@@ -1,4 +1,5 @@
 import React from 'react';
+
 import { FileText, Bookmark, CheckCircle2, Search } from 'lucide-react';
 
 interface DocumentMockupProps {

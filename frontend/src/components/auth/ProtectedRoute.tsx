@@ -1,7 +1,9 @@
 import React from 'react';
-import { Navigate, Outlet } from 'react-router-dom';
-import { useAuth } from '../../context/AuthContext';
+
 import { BookOpen, Loader2 } from 'lucide-react';
+import { Navigate, Outlet } from 'react-router-dom';
+
+import { useAuth } from '../../context/AuthContext';
 
 interface ProtectedRouteProps {
   children?: React.ReactNode;

@@ -1,5 +1,7 @@
 import React from 'react';
+
 import { ShieldCheck, FileText, ExternalLink, Sparkles, CheckCircle2 } from 'lucide-react';
+
 import { Badge } from '../ui/Badge';
 
 export const GroundedAnswerPreview: React.FC = () => {

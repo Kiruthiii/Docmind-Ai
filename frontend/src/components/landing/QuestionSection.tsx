@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
+
 import { Search, Eye, Filter, ArrowDown } from 'lucide-react';
-import { DocumentMockup } from '../visuals/DocumentMockup';
+
 import { Badge } from '../ui/Badge';
+import { DocumentMockup } from '../visuals/DocumentMockup';
 
 export const QuestionSection: React.FC = () => {
   const [retrievalActive, setRetrievalActive] = useState<boolean>(true);

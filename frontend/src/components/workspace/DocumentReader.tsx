@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+
 import * as pdfjsLib from 'pdfjs-dist';
 import {
   ChevronLeft,
@@ -17,9 +18,10 @@ import {
   AlertCircle,
   RefreshCw,
 } from 'lucide-react';
+
+import type { DocumentItem } from '../../types/docmind';
 import { Badge } from '../ui/Badge';
 import { documentApi } from '../../services/api';
-import type { DocumentItem } from '../../types/docmind';
 
 // Configure pdfjs worker URL for browser compatibility
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
