@@ -583,8 +583,8 @@ class LLMService:
         supporting_chunks = []
         validation_diag = {}
 
-        if self.client and self.api_key:
-            candidate_models = [settings.CHAT_MODEL, "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-latest", "gemini-3.6-flash"]
+        if self.client and self.api_key and not self._quota_exceeded:
+            candidate_models = [settings.CHAT_MODEL, "gemini-3.6-flash", "gemini-flash-latest"]
             seen_models = set()
             models_to_try = [m for m in candidate_models if not (m in seen_models or seen_models.add(m))]
 
@@ -615,6 +615,12 @@ class LLMService:
                         break
 
                 except Exception as e:
+                    err_str = str(e)
+                    if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "Quota" in err_str:
+                        if not self._quota_exceeded:
+                            logger.warning(f"Gemini API rate limit hit (429) on '{model_name}'. Tripping circuit breaker for instant fallback response.")
+                            self._quota_exceeded = True
+                        break
                     logger.warning(f"Gemini API model '{model_name}' failed: {e}. Trying failover model.")
 
         if not parsed_data or not is_grounded:
