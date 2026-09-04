@@ -1,10 +1,11 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+
+import { AppWorkspacePage } from './pages/AppWorkspacePage';
 import { AuthProvider } from './context/AuthContext';
 import { LandingPage } from './pages/LandingPage';
 import { LoginPage } from './pages/LoginPage';
-import { SignupPage } from './pages/SignupPage';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
-import { AppWorkspacePage } from './pages/AppWorkspacePage';
+import { SignupPage } from './pages/SignupPage';
 
 export function App() {
   return (

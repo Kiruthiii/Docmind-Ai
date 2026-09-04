@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+
 import {
   FileUp,
   X,
@@ -11,10 +12,11 @@ import {
   UploadCloud,
   Sparkles,
 } from 'lucide-react';
-import { Button } from '../ui/Button';
-import { Badge } from '../ui/Badge';
-import { documentApi } from '../../services/api';
+
 import type { DocumentItem } from '../../types/docmind';
+import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
+import { documentApi } from '../../services/api';
 
 interface PdfUploadModalProps {
   isOpen: boolean;

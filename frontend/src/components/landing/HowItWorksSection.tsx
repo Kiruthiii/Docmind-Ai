@@ -1,5 +1,7 @@
 import React from 'react';
+
 import { Brain, FileSearch, ShieldCheck, Cpu, CheckCircle, Award } from 'lucide-react';
+
 import { Badge } from '../ui/Badge';
 
 export const HowItWorksSection: React.FC = () => {

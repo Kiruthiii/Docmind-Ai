@@ -1,7 +1,9 @@
 import React, { useEffect } from 'react';
+
 import { Plus, Folder, FolderCheck, Loader2, FileUp, Scale } from 'lucide-react';
-import { DocumentList } from './DocumentList';
+
 import type { DocumentItem } from '../../types/docmind';
+import { DocumentList } from './DocumentList';
 
 export interface WorkspaceItem {
   id: string;

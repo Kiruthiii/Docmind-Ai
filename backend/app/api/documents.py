@@ -1,10 +1,12 @@
 import asyncio
-from fastapi import APIRouter, UploadFile, File, HTTPException, status, Response
 from typing import List
 
+from fastapi import (APIRouter, File, HTTPException, Response, UploadFile,
+                     status)
+
+from app.db.supabase_client import _in_memory_db, get_supabase_client
 from app.schemas.document import DocumentResponse, DocumentUploadResponse
 from app.services.ingestion_service import IngestionService
-from app.db.supabase_client import get_supabase_client, _in_memory_db
 
 router = APIRouter(tags=["Documents"])
 ingestion_service = IngestionService()

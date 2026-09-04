@@ -1,31 +1,26 @@
 import difflib
 import logging
 import math
-import uuid
 import re
-from typing import List, Dict, Any, Tuple
-from app.services.llm_service import (
-    LLMService,
-    STOP_WORDS,
-    NOISE_SECTION_MARKERS,
-    SECTION_KEYWORD_EXPANSIONS,
-    CLEAN_WORD_RE,
-    TOKEN_RE,
-    term_matches_words,
-    extract_target_numbered_entity,
-    chunk_contains_target_entity,
-    get_clean_q_terms
-)
-from app.db.supabase_client import get_supabase_client, _in_memory_db
-from app.schemas.chat import Citation, ChatMessageResponse, ComparisonResponse
-from app.core.config import settings
+import uuid
+from typing import Any, Dict, List, Tuple
 
-from app.services.agents.query_agent import QueryIntelligenceAgent, StructuredQuery
-from app.services.agents.document_agent import DocumentIntelligenceAgent
-from app.services.agents.retrieval_agent import RetrievalIntelligenceAgent
-from app.services.agents.assembly_agent import EvidenceAssemblyAgent
-from app.services.agents.validation_agent import EvidenceValidationAgent
+from app.core.config import settings
+from app.db.supabase_client import _in_memory_db, get_supabase_client
+from app.schemas.chat import ChatMessageResponse, Citation, ComparisonResponse
 from app.services.agents.answer_agent import AnswerIntelligenceAgent
+from app.services.agents.assembly_agent import EvidenceAssemblyAgent
+from app.services.agents.document_agent import DocumentIntelligenceAgent
+from app.services.agents.query_agent import (QueryIntelligenceAgent,
+                                             StructuredQuery)
+from app.services.agents.retrieval_agent import RetrievalIntelligenceAgent
+from app.services.agents.validation_agent import EvidenceValidationAgent
+from app.services.llm_service import (CLEAN_WORD_RE, NOISE_SECTION_MARKERS,
+                                      SECTION_KEYWORD_EXPANSIONS, STOP_WORDS,
+                                      TOKEN_RE, LLMService,
+                                      chunk_contains_target_entity,
+                                      extract_target_numbered_entity,
+                                      get_clean_q_terms, term_matches_words)
 
 logger = logging.getLogger("docmind")
 

@@ -1,7 +1,8 @@
 import io
-import re
 import logging
-from typing import List, Dict, Any, Optional
+import re
+from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel
 
 try:

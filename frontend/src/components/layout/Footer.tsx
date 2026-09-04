@@ -1,4 +1,5 @@
 import React from 'react';
+
 import { BookOpen, ShieldCheck, ArrowUpRight } from 'lucide-react';
 
 export const Footer: React.FC = () => {

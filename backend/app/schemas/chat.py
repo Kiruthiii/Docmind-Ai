@@ -1,5 +1,7 @@
+from typing import Any, Dict, List, Literal, Optional
+
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any, Literal
+
 
 class QueryIntent(BaseModel):
     query_type: Literal["overview", "specific_fact", "comparison", "visual_analysis", "methodology", "location_based"]

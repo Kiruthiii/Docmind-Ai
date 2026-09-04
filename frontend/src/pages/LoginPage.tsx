@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
-import { Link, useNavigate, Navigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+
 import { BookOpen, FileText, ArrowRight, ShieldCheck, AlertCircle, Loader2, Eye, EyeOff, KeyRound, CheckCircle2 } from 'lucide-react';
-import { Button } from '../components/ui/Button';
+import { Link, useNavigate, Navigate } from 'react-router-dom';
+
 import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
 import { supabase } from '../lib/supabaseClient';
+import { useAuth } from '../context/AuthContext';
 
 export const LoginPage: React.FC = () => {
   const { session, signIn } = useAuth();

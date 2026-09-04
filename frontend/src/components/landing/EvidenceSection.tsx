@@ -1,6 +1,7 @@
 import { ShieldCheck, CheckCircle2 } from 'lucide-react';
-import { Card } from '../ui/Card';
+
 import { Badge } from '../ui/Badge';
+import { Card } from '../ui/Card';
 
 export const EvidenceSection: React.FC = () => {
   return (

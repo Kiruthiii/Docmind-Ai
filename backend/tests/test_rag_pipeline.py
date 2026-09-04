@@ -1,7 +1,10 @@
-import pytest
-from app.services.rag_service import RAGService
-from app.db.supabase_client import _in_memory_db
 import uuid
+
+import pytest
+
+from app.db.supabase_client import _in_memory_db
+from app.services.rag_service import RAGService
+
 
 def test_rag_abstention_guardrail_when_no_evidence():
     rag = RAGService()

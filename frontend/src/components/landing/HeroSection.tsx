@@ -1,8 +1,10 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+
 import { ArrowRight, Play, ShieldCheck, FileText, CheckCircle2 } from 'lucide-react';
-import { Button } from '../ui/Button';
+import { Link } from 'react-router-dom';
+
 import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
 
 export const HeroSection: React.FC = () => {
   return (

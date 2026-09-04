@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { BookOpen, ChevronDown, LogOut, Menu, X, FolderCheck } from 'lucide-react';
+
 import type { User } from '@supabase/supabase-js';
+import { BookOpen, ChevronDown, LogOut, Menu, X, FolderCheck } from 'lucide-react';
 
 interface AppHeaderProps {
   user: User | null;

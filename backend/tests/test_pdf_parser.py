@@ -1,5 +1,7 @@
 import pytest
+
 from app.services.pdf_parser import PDFParser
+
 
 def test_convert_table_to_markdown():
     parser = PDFParser()

@@ -1,5 +1,7 @@
 import React from 'react';
+
 import { GraduationCap, Microscope, FileCode2, BarChart3, Check } from 'lucide-react';
+
 import { Badge } from '../ui/Badge';
 
 export const UseCasesSection: React.FC = () => {

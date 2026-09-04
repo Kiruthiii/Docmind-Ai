@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+
 import { Search, ShieldCheck, Sparkles, CheckCircle2, FileText, ExternalLink, ArrowRight, Eye } from 'lucide-react';
+
 import { Badge } from '../ui/Badge';
 
 export const MasterDocumentStage: React.FC = () => {

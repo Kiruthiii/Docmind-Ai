@@ -1,14 +1,11 @@
-from fastapi import APIRouter, HTTPException, status
 from typing import List
 
-from app.schemas.chat import (
-    ChatMessageRequest,
-    ChatMessageResponse,
-    ComparisonRequest,
-    ComparisonResponse
-)
-from app.services.rag_service import RAGService
+from fastapi import APIRouter, HTTPException, status
+
 from app.db.supabase_client import _in_memory_db
+from app.schemas.chat import (ChatMessageRequest, ChatMessageResponse,
+                              ComparisonRequest, ComparisonResponse)
+from app.services.rag_service import RAGService
 
 router = APIRouter(prefix="/chat", tags=["Chat & Grounded RAG"])
 rag_service = RAGService()

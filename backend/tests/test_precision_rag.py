@@ -1,7 +1,10 @@
-import pytest
 import uuid
-from app.services.rag_service import RAGService
+
+import pytest
+
 from app.db.supabase_client import _in_memory_db
+from app.services.rag_service import RAGService
+
 
 @pytest.fixture
 def setup_resume_workspace():
@@ -102,8 +105,8 @@ def test_6_multi_document_query(setup_resume_workspace):
     assert "| Comparison Category |" in response.markdown_matrix or "| Category |" in response.markdown_matrix
 
 def test_7_synthetic_resume_work_experience_query():
-    from app.services.pdf_parser import PDFParser
     from app.core.config import settings
+    from app.services.pdf_parser import PDFParser
 
     resume_text = (
         "Alex Rivera\n"
@@ -192,8 +195,8 @@ def test_9_tell_me_about_innolab_tech():
     assert "InnoLab Tech" in response.answer or "Trainee" in response.answer
 
 def test_10_all_precision_queries():
-    from app.services.pdf_parser import PDFParser
     from app.core.config import settings
+    from app.services.pdf_parser import PDFParser
 
     page1_text = (
         "Alex Rivera\n"
@@ -300,8 +303,8 @@ def test_10_all_precision_queries():
 
 
 def test_short_heading_preservation_first_project():
-    from app.services.rag_service import RAGService
     from app.db.supabase_client import _in_memory_db
+    from app.services.rag_service import RAGService
 
     rag = RAGService()
     ws_id = str(uuid.uuid4())
@@ -328,8 +331,8 @@ def test_short_heading_preservation_first_project():
 
 
 def test_typo_tolerance_query():
-    from app.services.rag_service import RAGService
     from app.db.supabase_client import _in_memory_db
+    from app.services.rag_service import RAGService
 
     rag = RAGService()
     ws_id = str(uuid.uuid4())
@@ -356,8 +359,8 @@ def test_typo_tolerance_query():
 
 
 def test_section_isolation_prevents_work_experience_leakage():
-    from app.services.rag_service import RAGService
     from app.db.supabase_client import _in_memory_db
+    from app.services.rag_service import RAGService
 
     rag = RAGService()
     ws_id = str(uuid.uuid4())
@@ -400,8 +403,8 @@ def test_section_isolation_prevents_work_experience_leakage():
 
 def test_mandatory_7_regression_queries():
     """Validates all 7 mandatory RAG precision regression queries."""
-    from app.services.rag_service import RAGService
     from app.db.supabase_client import _in_memory_db
+    from app.services.rag_service import RAGService
 
     rag = RAGService()
     ws_id = str(uuid.uuid4())
@@ -549,8 +552,8 @@ def test_mandatory_7_regression_queries():
 
 def test_mindbridge_duration_query_no_sql_leakage():
     """Validates that 'what is the duration of mindbridge' returns 3 months and excludes Database & SQL."""
-    from app.services.rag_service import RAGService
     from app.db.supabase_client import _in_memory_db
+    from app.services.rag_service import RAGService
 
     rag = RAGService()
     ws_id = str(uuid.uuid4())
@@ -596,8 +599,8 @@ def test_mindbridge_duration_query_no_sql_leakage():
 
 def test_research_paper_10_regression_queries():
     """Validates all 10 research paper regression queries."""
-    from app.services.rag_service import RAGService
     from app.db.supabase_client import _in_memory_db
+    from app.services.rag_service import RAGService
 
     rag = RAGService()
     ws_id = str(uuid.uuid4())

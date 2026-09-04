@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+
 import {
   X,
   Scale,
@@ -14,9 +15,10 @@ import {
   Square,
   RefreshCw,
 } from 'lucide-react';
-import { Button } from '../ui/Button';
-import { Badge } from '../ui/Badge';
+
 import type { DocumentItem } from '../../types/docmind';
+import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
 import { chatApi, type ComparisonResponseData } from '../../services/api';
 
 interface ComparisonModalProps {

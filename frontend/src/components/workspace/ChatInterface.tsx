@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+
 import {
   Send,
   Loader2,
@@ -10,9 +11,10 @@ import {
   User,
   BookOpen,
 } from 'lucide-react';
-import { Button } from '../ui/Button';
-import { Badge } from '../ui/Badge';
+
 import type { ChatMessage, Citation, DocumentItem } from '../../types/docmind';
+import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
 import { chatApi, type BackendCitation } from '../../services/api';
 
 interface ChatInterfaceProps {

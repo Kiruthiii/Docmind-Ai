@@ -1,5 +1,7 @@
 import { useState } from 'react';
+
 import { Search, ArrowRight, ShieldCheck, FileText, Check } from 'lucide-react';
+
 import { Badge } from '../ui/Badge';
 
 export const RetrievalVisualizer: React.FC = () => {

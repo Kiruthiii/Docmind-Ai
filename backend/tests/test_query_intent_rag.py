@@ -1,10 +1,14 @@
-import pytest
 import uuid
-from app.services.llm_service import LLMService
-from app.services.pdf_parser import PDFParser, detect_document_position, detect_content_type
-from app.services.rag_service import RAGService
-from app.schemas.chat import QueryIntent
+
+import pytest
+
 from app.db.supabase_client import _in_memory_db
+from app.schemas.chat import QueryIntent
+from app.services.llm_service import LLMService
+from app.services.pdf_parser import (PDFParser, detect_content_type,
+                                     detect_document_position)
+from app.services.rag_service import RAGService
+
 
 def test_query_intent_analysis():
     llm = LLMService()

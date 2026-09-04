@@ -1,6 +1,7 @@
-import re
 import logging
-from typing import List, Optional, Literal
+import re
+from typing import List, Literal, Optional
+
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("docmind")

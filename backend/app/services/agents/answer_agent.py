@@ -1,6 +1,7 @@
-import re
 import logging
-from typing import List, Dict, Any, Tuple
+import re
+from typing import Any, Dict, List, Tuple
+
 from app.services.agents.query_agent import StructuredQuery
 from app.services.agents.validation_agent import ValidationResult
 from app.services.llm_service import LLMService

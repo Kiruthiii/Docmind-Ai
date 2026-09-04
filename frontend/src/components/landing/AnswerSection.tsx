@@ -1,7 +1,9 @@
 import React from 'react';
-import { GroundedAnswerPreview } from '../visuals/GroundedAnswerPreview';
-import { Badge } from '../ui/Badge';
+
 import { Sparkles } from 'lucide-react';
+
+import { Badge } from '../ui/Badge';
+import { GroundedAnswerPreview } from '../visuals/GroundedAnswerPreview';
 
 export const AnswerSection: React.FC = () => {
   return (

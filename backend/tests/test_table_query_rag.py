@@ -1,8 +1,12 @@
-import pytest
 import uuid
-from app.services.rag_service import RAGService
+
+import pytest
+
 from app.db.supabase_client import _in_memory_db
-from app.services.llm_service import extract_target_numbered_entity, chunk_contains_target_entity
+from app.services.llm_service import (chunk_contains_target_entity,
+                                      extract_target_numbered_entity)
+from app.services.rag_service import RAGService
+
 
 def test_extract_target_numbered_entity_helper():
     assert extract_target_numbered_entity("What is the table 1 ") == ("table", "1")
