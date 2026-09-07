@@ -26,6 +26,26 @@ def list_workspaces(current_user: Dict[str, Any] = Depends(get_current_user)):
     for k, v in _in_memory_db.workspaces.items():
         if v.get("user_id") == user_id:
             all_items[k] = v
+
+    # Auto-provision default "My Workspace" for new users if 0 workspaces exist
+    if not all_items:
+        ws_id = str(uuid.uuid4())
+        default_ws = {
+            "id": ws_id,
+            "user_id": user_id,
+            "name": "My Workspace",
+            "created_at": "2026-08-24T20:00:00Z"
+        }
+        if client:
+            try:
+                res = client.table("workspaces").insert(default_ws).execute()
+                if res.data:
+                    default_ws = res.data[0]
+            except Exception:
+                pass
+        _in_memory_db.workspaces[ws_id] = default_ws
+        all_items[ws_id] = default_ws
+
     return list(all_items.values())
 
 @router.post("", response_model=WorkspaceResponse, status_code=status.HTTP_201_CREATED)

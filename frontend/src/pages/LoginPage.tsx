@@ -9,7 +9,7 @@ import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
 export const LoginPage: React.FC = () => {
-  const { session, signIn } = useAuth();
+  const { session, signIn, isPasswordRecovery } = useAuth();
   const navigate = useNavigate();
 
   const [email, setEmail] = useState('');
@@ -23,8 +23,13 @@ export const LoginPage: React.FC = () => {
   const [resetEmailSent, setResetEmailSent] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
 
-  // If already authenticated, redirect to /app
-  if (session) {
+  // If password recovery link was clicked, navigate to /reset-password
+  if (isPasswordRecovery) {
+    return <Navigate to="/reset-password" replace />;
+  }
+
+  // If already authenticated normally, redirect to /app
+  if (session && !isPasswordRecovery) {
     return <Navigate to="/app" replace />;
   }
 
@@ -66,7 +71,7 @@ export const LoginPage: React.FC = () => {
 
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/login`,
+        redirectTo: `${window.location.origin}/reset-password`,
       });
 
       if (error) {

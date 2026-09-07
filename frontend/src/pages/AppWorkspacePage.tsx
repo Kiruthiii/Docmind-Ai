@@ -56,8 +56,17 @@ export const AppWorkspacePage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    loadWorkspaces();
-  }, [loadWorkspaces]);
+    // Reset local workspace and document states when user changes
+    setWorkspaces([]);
+    setActiveWorkspaceId(null);
+    setWorkspaceDocs({});
+    setActiveDocIdMap({});
+    setChatMessagesMap({});
+
+    if (user) {
+      loadWorkspaces();
+    }
+  }, [user?.id, loadWorkspaces]);
 
   // Fetch documents for active workspace from real FastAPI backend
   const fetchWorkspaceDocuments = useCallback(async (wsId: string) => {
@@ -114,6 +123,11 @@ export const AppWorkspacePage: React.FC = () => {
   };
 
   const handleSignOut = async () => {
+    setWorkspaces([]);
+    setActiveWorkspaceId(null);
+    setWorkspaceDocs({});
+    setActiveDocIdMap({});
+    setChatMessagesMap({});
     await signOut();
   };
 

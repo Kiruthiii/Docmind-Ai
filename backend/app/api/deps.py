@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import Depends, HTTPException, Security, status
+from fastapi import Depends, HTTPException, Query, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import settings
@@ -10,16 +10,21 @@ from app.db.supabase_client import get_supabase_client
 logger = logging.getLogger("docmind")
 security = HTTPBearer(auto_error=False)
 
-def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Security(security)) -> Dict[str, Any]:
-    token: Optional[str] = None
+def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security),
+    token: Optional[str] = Query(None)
+) -> Dict[str, Any]:
+    auth_token: Optional[str] = None
     if credentials and credentials.credentials:
-        token = credentials.credentials
+        auth_token = credentials.credentials
+    elif token:
+        auth_token = token
 
-    if token:
+    if auth_token:
         client = get_supabase_client()
         if client:
             try:
-                user_res = client.auth.get_user(token)
+                user_res = client.auth.get_user(auth_token)
                 if user_res and user_res.user:
                     user = user_res.user
                     return {

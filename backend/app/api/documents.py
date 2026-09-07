@@ -1,9 +1,10 @@
 import asyncio
-from typing import List
+from typing import Any, Dict, List
 
-from fastapi import (APIRouter, File, HTTPException, Response, UploadFile,
+from fastapi import (APIRouter, Depends, File, HTTPException, Response, UploadFile,
                      status)
 
+from app.api.deps import get_current_user
 from app.db.supabase_client import _in_memory_db, get_supabase_client
 from app.schemas.document import DocumentResponse, DocumentUploadResponse
 from app.services.ingestion_service import IngestionService
@@ -11,8 +12,46 @@ from app.services.ingestion_service import IngestionService
 router = APIRouter(tags=["Documents"])
 ingestion_service = IngestionService()
 
+def verify_workspace_ownership(workspace_id: str, user_id: str) -> Dict[str, Any]:
+    ws_item = None
+    if workspace_id in _in_memory_db.workspaces:
+        ws_item = _in_memory_db.workspaces[workspace_id]
+    else:
+        client = get_supabase_client()
+        if client:
+            try:
+                res = client.table("workspaces").select("*").eq("id", workspace_id).execute()
+                if res.data:
+                    ws_item = res.data[0]
+            except Exception:
+                pass
+
+    if not ws_item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+
+    if ws_item.get("user_id") != user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this workspace")
+    return ws_item
+
+def get_document_record(document_id: str) -> Dict[str, Any]:
+    if document_id in _in_memory_db.documents:
+        return _in_memory_db.documents[document_id]
+    client = get_supabase_client()
+    if client:
+        try:
+            res = client.table("documents").select("*").eq("id", document_id).execute()
+            if res.data:
+                return res.data[0]
+        except Exception:
+            pass
+    return None
+
 @router.get("/workspaces/{workspace_id}/documents", response_model=List[DocumentResponse])
-def list_workspace_documents(workspace_id: str):
+def list_workspace_documents(
+    workspace_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    verify_workspace_ownership(workspace_id, current_user["id"])
     db_docs = []
     client = get_supabase_client()
     if client:
@@ -31,7 +70,13 @@ def list_workspace_documents(workspace_id: str):
     return list(all_docs.values())
 
 @router.post("/workspaces/{workspace_id}/documents", response_model=DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
-async def upload_document(workspace_id: str, file: UploadFile = File(...)):
+async def upload_document(
+    workspace_id: str,
+    file: UploadFile = File(...),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    verify_workspace_ownership(workspace_id, current_user["id"])
+
     # Validate PDF content type / extension
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(
@@ -68,11 +113,23 @@ async def upload_document(workspace_id: str, file: UploadFile = File(...)):
     )
 
 @router.get("/documents/{document_id}/file")
-def get_document_file(document_id: str):
+def get_document_file(
+    document_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
     """Serves raw PDF binary stream for the frontend PDF reader preview canvas."""
+    doc_rec = get_document_record(document_id)
+    if not doc_rec:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"PDF document file for ID {document_id} was not found on server."
+        )
+
+    workspace_id = doc_rec.get("workspace_id")
+    verify_workspace_ownership(workspace_id, current_user["id"])
+
     if document_id in _in_memory_db.pdf_bytes:
         pdf_bytes = _in_memory_db.pdf_bytes[document_id]
-        doc_rec = _in_memory_db.documents.get(document_id, {})
         filename = doc_rec.get("filename", "document.pdf")
         return Response(
             content=pdf_bytes,
@@ -83,17 +140,15 @@ def get_document_file(document_id: str):
     client = get_supabase_client()
     if client:
         try:
-            doc_res = client.table("documents").select("*").eq("id", document_id).execute()
-            if doc_res.data:
-                storage_path = doc_res.data[0].get("storage_path")
-                if storage_path:
-                    res = client.storage.from_("documents").download(storage_path)
-                    return Response(
-                        content=res,
-                        media_type="application/pdf",
-                        headers={"Content-Disposition": f'inline; filename="{doc_res.data[0].get("filename", "document.pdf")}"'}
-                    )
-        except Exception as e:
+            storage_path = doc_rec.get("storage_path")
+            if storage_path:
+                res = client.storage.from_("documents").download(storage_path)
+                return Response(
+                    content=res,
+                    media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{doc_rec.get("filename", "document.pdf")}"'}
+                )
+        except Exception:
             pass
 
     raise HTTPException(
@@ -102,7 +157,20 @@ def get_document_file(document_id: str):
     )
 
 @router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_document(document_id: str):
+def delete_document(
+    document_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    doc_rec = get_document_record(document_id)
+    if not doc_rec:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found"
+        )
+
+    workspace_id = doc_rec.get("workspace_id")
+    verify_workspace_ownership(workspace_id, current_user["id"])
+
     if document_id in _in_memory_db.documents:
         del _in_memory_db.documents[document_id]
         _in_memory_db.document_chunks = [c for c in _in_memory_db.document_chunks if c.get("document_id") != document_id]

@@ -21,7 +21,8 @@ import {
 
 import type { DocumentItem } from '../../types/docmind';
 import { Badge } from '../ui/Badge';
-import { documentApi } from '../../services/api';
+import { documentApi, API_BASE_URL } from '../../services/api';
+import { supabase } from '../../lib/supabaseClient';
 
 // Configure pdfjs worker URL for browser compatibility
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
@@ -78,7 +79,13 @@ export const DocumentReader: React.FC<DocumentReaderProps> = ({
       let source: any = document.file_url || document.file_data;
 
       if (!source && document.id) {
-        source = documentApi.getFileUrl(document.id);
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token;
+        const url = `${API_BASE_URL}/documents/${document.id}/file${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+        source = {
+          url,
+          httpHeaders: token ? { Authorization: `Bearer ${token}` } : {},
+        };
       }
 
       if (!source) {
