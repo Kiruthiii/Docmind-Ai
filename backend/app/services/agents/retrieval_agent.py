@@ -78,18 +78,19 @@ class RetrievalIntelligenceAgent:
                 chunk_vec = chunk.get("embedding", [])
                 score = cosine_similarity(query_vector, chunk_vec) if chunk_vec else 0.0
 
-                content_lower = chunk.get("content", "").lower()
-                words = set(TOKEN_RE.findall(content_lower))
+                # Secondary rescue score if chunk_vec is empty or query_vector is mock sha256 vector from rate limit 429
+                if not chunk_vec or score < 0.15:
+                    content_lower = chunk.get("content", "").lower()
+                    words = set(TOKEN_RE.findall(content_lower))
+                    var_text = " ".join(structured_query.dynamic_query_variations) if structured_query.dynamic_query_variations else question
+                    q_terms = [w for w in TOKEN_RE.findall(var_text.lower()) if w not in STOP_WORDS]
+                    matches = sum(1 for term in q_terms if term_matches_words(term, words, content_lower))
+                    rescue_score = min(0.6, matches * 0.15)
+                    score = max(score, rescue_score)
 
-                matches = sum(1 for term in q_terms if term_matches_words(term, words, content_lower))
-                info_matches = sum(1 for term in info_terms if term_matches_words(term, words, content_lower))
-
-                score += matches * 0.15 + info_matches * 0.25
-
-                if score >= settings.SIMILARITY_THRESHOLD or matches > 0:
-                    scored_chunk = dict(chunk)
-                    scored_chunk["similarity"] = score
-                    scored_chunks.append(scored_chunk)
+                scored_chunk = dict(chunk)
+                scored_chunk["similarity"] = score
+                scored_chunks.append(scored_chunk)
 
             scored_chunks.sort(key=lambda x: x["similarity"], reverse=True)
             raw_candidates = scored_chunks[:top_k]
@@ -139,19 +140,19 @@ class RetrievalIntelligenceAgent:
 
             hybrid_score = sim
 
-            # Boost section match
-            if any(ts in pos or ts in p_sec or ts in s_path for ts in target_sections):
-                hybrid_score += 0.35
+            # Secondary metadata signal: slight boost for section alignment
+            if target_sections and any(ts in pos or ts in p_sec or ts in s_path for ts in target_sections):
+                hybrid_score += 0.10
 
-            # Boost visual tables/figures for visual intent
+            # Secondary metadata signal: visual tables/figures for visual intent
             if structured_query.intent == "VISUAL_ANALYSIS" and (chunk.get("content_type") in ("table", "figure_caption") or chunk.get("chunk_type") in ("table", "figure_caption")):
-                hybrid_score += 0.35
+                hybrid_score += 0.10
 
-            # Filter out reference noise if query asks for intro/overview/results/section
+            # Secondary metadata signal: reduce reference noise unless specifically asked for
             c_type = (chunk.get("content_type") or chunk.get("chunk_type") or "").lower()
             if "reference" in pos or "reference" in p_sec or "bibliography" in p_sec or c_type == "reference":
                 if target_sections and not any("ref" in ts for ts in target_sections):
-                    hybrid_score -= 1.0
+                    hybrid_score -= 0.30
 
             chunk_copy = dict(chunk)
             chunk_copy["hybrid_score"] = hybrid_score
