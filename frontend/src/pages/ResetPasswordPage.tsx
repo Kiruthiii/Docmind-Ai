@@ -8,7 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabaseClient';
 
 export const ResetPasswordPage: React.FC = () => {
-  const { updatePassword, session, isPasswordRecovery, setIsPasswordRecovery } = useAuth();
+  const { updatePassword, setIsPasswordRecovery } = useAuth();
   const navigate = useNavigate();
 
   const [newPassword, setNewPassword] = useState('');
@@ -111,7 +111,7 @@ export const ResetPasswordPage: React.FC = () => {
               {/* Header */}
               <div className="mb-6 space-y-2">
                 <div className="flex items-center gap-2">
-                  <Badge variant="purple" className="flex items-center gap-1.5 px-3 py-1">
+                  <Badge variant="violet" className="flex items-center gap-1.5 px-3 py-1">
                     <KeyRound className="w-3.5 h-3.5 text-[#7C3AED]" /> Security Recovery
                   </Badge>
                 </div>

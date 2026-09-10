@@ -44,9 +44,13 @@ export const AppWorkspacePage: React.FC = () => {
       const data = await workspaceApi.list();
       setWorkspaces(data);
       if (data.length > 0) {
-        setActiveWorkspaceId((prev) => (prev && data.some((w) => w.id === prev) ? prev : data[0].id));
+        const savedId = localStorage.getItem('docmind_active_workspace_id');
+        const targetWs = savedId && data.some((w) => w.id === savedId) ? savedId : data[0].id;
+        setActiveWorkspaceId(targetWs);
+        localStorage.setItem('docmind_active_workspace_id', targetWs);
       } else {
         setActiveWorkspaceId(null);
+        localStorage.removeItem('docmind_active_workspace_id');
       }
     } catch (err: any) {
       setApiError(err.message || 'Failed to fetch user workspaces from server.');
@@ -54,6 +58,7 @@ export const AppWorkspacePage: React.FC = () => {
       setLoadingWorkspaces(false);
     }
   }, []);
+
 
   useEffect(() => {
     // Reset local workspace and document states when user changes
@@ -205,7 +210,10 @@ export const AppWorkspacePage: React.FC = () => {
         <WorkspaceSidebar
           workspaces={workspaces}
           activeWorkspaceId={activeWorkspaceId}
-          onSelectWorkspace={(id) => setActiveWorkspaceId(id)}
+          onSelectWorkspace={(id) => {
+            setActiveWorkspaceId(id);
+            localStorage.setItem('docmind_active_workspace_id', id);
+          }}
           onOpenCreateModal={() => {
             setCreateError(null);
             setIsCreateModalOpen(true);

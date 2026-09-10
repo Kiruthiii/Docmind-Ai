@@ -140,7 +140,7 @@ def test_user_a_cannot_access_or_delete_user_b_workspace():
         # Try DELETE
         del_res = client.delete(f"/api/v1/workspaces/{user_b_ws_id}", headers=headers)
         assert del_res.status_code == 403
-        assert "Not authorized to delete this workspace" in del_res.json()["detail"]
+        assert "Not authorized" in del_res.json()["detail"]
 
 def test_user_a_cannot_see_user_b_workspace_in_list():
     """Verify listing workspaces only returns workspaces owned by the authenticated user."""

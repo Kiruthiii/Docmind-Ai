@@ -31,6 +31,7 @@ def get_current_user(
                         "id": str(user.id),
                         "email": getattr(user, "email", ""),
                         "user_metadata": getattr(user, "user_metadata", {}) or {},
+                        "token": auth_token,
                     }
             except Exception as e:
                 logger.warning(f"Failed to verify Supabase token: {e}")
@@ -42,6 +43,7 @@ def get_current_user(
             "id": "00000000-0000-0000-0000-000000000001",
             "email": "demo@docmind.ai",
             "user_metadata": {"full_name": "Demo Student User"},
+            "token": None,
         }
 
     # Strict production requirement: Rejects missing/invalid token with 401 Unauthorized

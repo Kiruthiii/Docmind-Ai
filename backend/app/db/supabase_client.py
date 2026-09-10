@@ -22,16 +22,30 @@ class InMemoryDatabase:
 _in_memory_db = InMemoryDatabase()
 _supabase_client_instance: Optional[Client] = None
 
-def get_supabase_client() -> Optional[Client]:
-    global _supabase_client_instance
-    if _supabase_client_instance is not None:
-        return _supabase_client_instance
+def get_supabase_client(access_token: Optional[str] = None) -> Optional[Client]:
+    """
+    Returns a Supabase client.
+    If access_token is provided, configures headers with the authenticated user's Bearer JWT
+    so PostgREST executes queries in Postgres under the authenticated user's scope (enforcing RLS).
+    """
+    if not settings.SUPABASE_URL or not settings.SUPABASE_KEY or "your-project" in settings.SUPABASE_URL:
+        return None
 
-    if settings.SUPABASE_URL and settings.SUPABASE_KEY and "your-project" not in settings.SUPABASE_URL:
-        try:
-            _supabase_client_instance = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+    try:
+        if access_token:
+            if access_token.count(".") != 2:
+                return None
+            client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+            client.postgrest.auth(access_token)
+            return client
+
+        global _supabase_client_instance
+        if _supabase_client_instance is not None:
             return _supabase_client_instance
-        except Exception as e:
-            logger.warning(f"Failed to connect to Supabase: {e}. Falling back to in-memory mode.")
-            return None
-    return None
+
+        _supabase_client_instance = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+        return _supabase_client_instance
+    except Exception as e:
+        logger.warning(f"Failed to connect to Supabase: {e}")
+        return None
+

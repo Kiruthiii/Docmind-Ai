@@ -21,7 +21,7 @@ import {
 
 import type { DocumentItem } from '../../types/docmind';
 import { Badge } from '../ui/Badge';
-import { documentApi, API_BASE_URL } from '../../services/api';
+import { API_BASE_URL } from '../../services/api';
 import { supabase } from '../../lib/supabaseClient';
 
 // Configure pdfjs worker URL for browser compatibility

@@ -910,7 +910,7 @@ class LLMService:
             if is_relevant:
                 relevant_chunks.append(chunk)
 
-        GENERIC_QUERY_TERMS = {"system", "model", "paper", "method", "approach", "data", "text", "document", "use", "used", "using", "work", "deploying", "deployed", "make", "made", "study", "this", "that", "it"}
+        GENERIC_QUERY_TERMS = {"system", "model", "paper", "method", "approach", "data", "text", "document", "use", "used", "using", "work", "deploying", "deployed", "make", "made", "study", "this", "that", "it", "role", "roles", "internship", "internships", "experience", "detail", "details", "information", "about", "tell"}
         specific_q_terms = [t for t in q_terms if t.lower() not in GENERIC_QUERY_TERMS]
 
         if specific_q_terms:
@@ -1009,7 +1009,7 @@ class LLMService:
                     "what", "is", "are", "the", "a", "an", "of", "in", "for", "to", "with", "on", "at", "from", "by", "my", "your",
                     "show", "me", "can", "you", "tell", "give", "list", "does", "do", "did", "how", "why", "which",
                     "duration", "time", "period", "length", "date", "when", "where", "who", "cost", "price", "value", "score", "gpa", "cgpa", "details",
-                    "internship", "internships", "experience", "education", "project", "projects", "job", "role", "work", "training"
+                    "internship", "internships", "experience", "education", "project", "projects", "job", "role", "roles", "work", "training"
                 }
                 entity_terms = [t for t in q_terms if t.lower() not in GENERIC_ATTR_WORDS and len(t) >= 3]
                 if not entity_terms:

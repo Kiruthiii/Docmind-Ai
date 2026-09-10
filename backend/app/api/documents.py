@@ -1,5 +1,6 @@
 import asyncio
-from typing import Any, Dict, List
+import logging
+from typing import Any, Dict, List, Optional
 
 from fastapi import (APIRouter, Depends, File, HTTPException, Response, UploadFile,
                      status)
@@ -9,22 +10,26 @@ from app.db.supabase_client import _in_memory_db, get_supabase_client
 from app.schemas.document import DocumentResponse, DocumentUploadResponse
 from app.services.ingestion_service import IngestionService
 
+logger = logging.getLogger("docmind")
 router = APIRouter(tags=["Documents"])
 ingestion_service = IngestionService()
 
-def verify_workspace_ownership(workspace_id: str, user_id: str) -> Dict[str, Any]:
+def verify_workspace_ownership(workspace_id: str, user_id: str, token: Optional[str] = None) -> Dict[str, Any]:
     ws_item = None
-    if workspace_id in _in_memory_db.workspaces:
-        ws_item = _in_memory_db.workspaces[workspace_id]
+    is_dev_user = (user_id == "00000000-0000-0000-0000-000000000001")
+    client = get_supabase_client(token) if (token and not is_dev_user) else None
+    if client:
+        try:
+            res = client.table("workspaces").select("*").eq("id", workspace_id).execute()
+            if res.data:
+                ws_item = res.data[0]
+            else:
+                ws_item = _in_memory_db.workspaces.get(workspace_id)
+        except Exception as e:
+            logger.warning(f"Error checking workspace {workspace_id} in Supabase, checking in-memory DB: {e}")
+            ws_item = _in_memory_db.workspaces.get(workspace_id)
     else:
-        client = get_supabase_client()
-        if client:
-            try:
-                res = client.table("workspaces").select("*").eq("id", workspace_id).execute()
-                if res.data:
-                    ws_item = res.data[0]
-            except Exception:
-                pass
+        ws_item = _in_memory_db.workspaces.get(workspace_id)
 
     if not ws_item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
@@ -33,41 +38,39 @@ def verify_workspace_ownership(workspace_id: str, user_id: str) -> Dict[str, Any
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this workspace")
     return ws_item
 
-def get_document_record(document_id: str) -> Dict[str, Any]:
-    if document_id in _in_memory_db.documents:
-        return _in_memory_db.documents[document_id]
-    client = get_supabase_client()
+def get_document_record(document_id: str, token: Optional[str] = None) -> Dict[str, Any]:
+    client = get_supabase_client(token) if token else None
     if client:
         try:
             res = client.table("documents").select("*").eq("id", document_id).execute()
             if res.data:
                 return res.data[0]
-        except Exception:
-            pass
-    return None
+        except Exception as e:
+            logger.error(f"Error fetching document {document_id} record: {e}")
+    return _in_memory_db.documents.get(document_id)
 
 @router.get("/workspaces/{workspace_id}/documents", response_model=List[DocumentResponse])
 def list_workspace_documents(
     workspace_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    verify_workspace_ownership(workspace_id, current_user["id"])
-    db_docs = []
-    client = get_supabase_client()
+    token = current_user.get("token")
+    verify_workspace_ownership(workspace_id, current_user["id"], token)
+    
+    client = get_supabase_client(token) if token else None
     if client:
         try:
             res = client.table("documents").select("*").eq("workspace_id", workspace_id).execute()
-            if res.data:
-                db_docs = res.data
-        except Exception:
-            pass
-
-    all_docs = {d["id"]: d for d in db_docs if "id" in d}
-    for d_id, d_item in _in_memory_db.documents.items():
-        if d_item.get("workspace_id") == workspace_id:
-            all_docs[d_id] = d_item
-
-    return list(all_docs.values())
+            if res.data is not None:
+                return res.data
+        except Exception as e:
+            logger.error(f"Error listing documents for workspace {workspace_id} from Supabase: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to fetch workspace documents: {e}"
+            )
+    
+    return [d for d in _in_memory_db.documents.values() if d.get("workspace_id") == workspace_id]
 
 @router.post("/workspaces/{workspace_id}/documents", response_model=DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_document(
@@ -75,7 +78,8 @@ async def upload_document(
     file: UploadFile = File(...),
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    verify_workspace_ownership(workspace_id, current_user["id"])
+    token = current_user.get("token")
+    verify_workspace_ownership(workspace_id, current_user["id"], token)
 
     # Validate PDF content type / extension
     if not file.filename.lower().endswith(".pdf"):
@@ -96,7 +100,8 @@ async def upload_document(
         ingestion_service.process_pdf,
         workspace_id=workspace_id,
         filename=file.filename,
-        pdf_bytes=pdf_bytes
+        pdf_bytes=pdf_bytes,
+        access_token=token
     )
 
     if result.get("status") == "failed":
@@ -117,39 +122,39 @@ def get_document_file(
     document_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """Serves raw PDF binary stream for the frontend PDF reader preview canvas."""
-    doc_rec = get_document_record(document_id)
+    """Serves raw PDF binary stream from Supabase Storage for preview canvas."""
+    token = current_user.get("token")
+    doc_rec = get_document_record(document_id, token)
     if not doc_rec:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"PDF document file for ID {document_id} was not found on server."
+            detail=f"PDF document record for ID {document_id} was not found on server."
         )
 
     workspace_id = doc_rec.get("workspace_id")
-    verify_workspace_ownership(workspace_id, current_user["id"])
+    verify_workspace_ownership(workspace_id, current_user["id"], token)
+
+    storage_path = doc_rec.get("storage_path")
+    filename = doc_rec.get("filename", "document.pdf")
+
+    client = get_supabase_client(token) if token else None
+    if client and storage_path:
+        try:
+            pdf_bytes = client.storage.from_("documents").download(storage_path)
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'inline; filename="{filename}"'}
+            )
+        except Exception as e:
+            logger.warning(f"Error downloading PDF file {storage_path} from Supabase Storage: {e}. Checking in-memory fallback...")
 
     if document_id in _in_memory_db.pdf_bytes:
-        pdf_bytes = _in_memory_db.pdf_bytes[document_id]
-        filename = doc_rec.get("filename", "document.pdf")
         return Response(
-            content=pdf_bytes,
+            content=_in_memory_db.pdf_bytes[document_id],
             media_type="application/pdf",
             headers={"Content-Disposition": f'inline; filename="{filename}"'}
         )
-
-    client = get_supabase_client()
-    if client:
-        try:
-            storage_path = doc_rec.get("storage_path")
-            if storage_path:
-                res = client.storage.from_("documents").download(storage_path)
-                return Response(
-                    content=res,
-                    media_type="application/pdf",
-                    headers={"Content-Disposition": f'inline; filename="{doc_rec.get("filename", "document.pdf")}"'}
-                )
-        except Exception:
-            pass
 
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
@@ -161,7 +166,8 @@ def delete_document(
     document_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    doc_rec = get_document_record(document_id)
+    token = current_user.get("token")
+    doc_rec = get_document_record(document_id, token)
     if not doc_rec:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -169,16 +175,34 @@ def delete_document(
         )
 
     workspace_id = doc_rec.get("workspace_id")
-    verify_workspace_ownership(workspace_id, current_user["id"])
+    verify_workspace_ownership(workspace_id, current_user["id"], token)
 
-    if document_id in _in_memory_db.documents:
-        del _in_memory_db.documents[document_id]
-        _in_memory_db.document_chunks = [c for c in _in_memory_db.document_chunks if c.get("document_id") != document_id]
-    if document_id in _in_memory_db.pdf_bytes:
-        del _in_memory_db.pdf_bytes[document_id]
-
-    client = get_supabase_client()
+    client = get_supabase_client(token) if token else None
     if client:
-        client.table("documents").delete().eq("id", document_id).execute()
+        try:
+            # 1. Explicitly delete physical PDF from Supabase Storage
+            storage_path = doc_rec.get("storage_path")
+            if storage_path:
+                try:
+                    client.storage.from_("documents").remove([storage_path])
+                except Exception as st_err:
+                    logger.warning(f"Error deleting physical file {storage_path} from Supabase Storage: {st_err}")
+
+            # 2. Delete document record in Supabase (PostgreSQL ON DELETE CASCADE handles chunks)
+            client.table("documents").delete().eq("id", document_id).execute()
+        except Exception as e:
+            logger.error(f"Error deleting document {document_id} in Supabase: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to delete document from database: {e}"
+            )
+    else:
+        if document_id in _in_memory_db.documents:
+            del _in_memory_db.documents[document_id]
+            _in_memory_db.document_chunks = [c for c in _in_memory_db.document_chunks if c.get("document_id") != document_id]
+        if document_id in _in_memory_db.pdf_bytes:
+            del _in_memory_db.pdf_bytes[document_id]
 
     return None
+
+
