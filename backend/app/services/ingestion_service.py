@@ -126,7 +126,16 @@ class IngestionService:
                     client.table("document_chunks").insert(db_payload).execute()
                 except Exception as e:
                     logger.error(f"Error inserting chunks to Supabase: {e}")
-                    raise e
+                    if "metadata" in str(e) or "PGRST204" in str(e):
+                        logger.warning("Retrying document_chunks insert without 'metadata' column...")
+                        try:
+                            db_payload_no_meta = [{k: v for k, v in c.items() if k not in ("filename", "metadata")} for c in chunks_to_insert]
+                            client.table("document_chunks").insert(db_payload_no_meta).execute()
+                        except Exception as retry_err:
+                            logger.error(f"Retry without metadata also failed: {retry_err}")
+                            raise retry_err
+                    else:
+                        raise e
             else:
                 _in_memory_db.document_chunks.extend(chunks_to_insert)
 

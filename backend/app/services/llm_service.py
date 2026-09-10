@@ -147,34 +147,45 @@ class LLMService:
             return self._mock_embedding(text)
 
     def get_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
-        """Generates 768-dimensional embeddings for a list of texts using batch processing."""
+        """Generates 768-dimensional embeddings for a list of texts using batch processing in chunks of max 96."""
         if not texts:
             return []
 
         if self._quota_exceeded or not (self.client and self.api_key):
             return [self._mock_embedding(t) for t in texts]
 
-        try:
-            response = self.client.models.embed_content(
-                model=settings.EMBEDDING_MODEL,
-                contents=texts,
-                config=types.EmbedContentConfig(output_dimensionality=768)
-            )
-            if hasattr(response, "embeddings") and response.embeddings:
-                return [e.values for e in response.embeddings]
-            elif hasattr(response, "embedding") and response.embedding:
-                return [response.embedding.values]
-            else:
-                return [self._mock_embedding(t) for t in texts]
-        except Exception as e:
-            err_str = str(e)
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "Quota" in err_str:
-                if not self._quota_exceeded:
-                    logger.warning("Gemini API batch embedding quota exceeded (429). Enabling fast mock embedding circuit breaker.")
-                    self._quota_exceeded = True
-            else:
-                logger.error(f"Error generating batch embeddings from Gemini API: {e}")
-            return [self._mock_embedding(t) for t in texts]
+        batch_size = 96
+        all_embeddings: List[List[float]] = []
+
+        for i in range(0, len(texts), batch_size):
+            sub_texts = texts[i:i + batch_size]
+            if self._quota_exceeded:
+                all_embeddings.extend([self._mock_embedding(t) for t in sub_texts])
+                continue
+
+            try:
+                response = self.client.models.embed_content(
+                    model=settings.EMBEDDING_MODEL,
+                    contents=sub_texts,
+                    config=types.EmbedContentConfig(output_dimensionality=768)
+                )
+                if hasattr(response, "embeddings") and response.embeddings:
+                    all_embeddings.extend([e.values for e in response.embeddings])
+                elif hasattr(response, "embedding") and response.embedding:
+                    all_embeddings.extend([response.embedding.values])
+                else:
+                    all_embeddings.extend([self._mock_embedding(t) for t in sub_texts])
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "Quota" in err_str:
+                    if not self._quota_exceeded:
+                        logger.warning("Gemini API batch embedding quota exceeded (429). Enabling fast mock embedding circuit breaker.")
+                        self._quota_exceeded = True
+                else:
+                    logger.error(f"Error generating batch embeddings from Gemini API: {e}")
+                all_embeddings.extend([self._mock_embedding(t) for t in sub_texts])
+
+        return all_embeddings
 
     def analyze_query_intent(self, question: str) -> QueryIntent:
         """Analyzes user query prior to retrieval to produce structured QueryIntent."""

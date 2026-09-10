@@ -35,8 +35,12 @@ CREATE TABLE IF NOT EXISTS public.document_chunks (
     section_path TEXT DEFAULT '',
     parent_section TEXT DEFAULT '',
     embedding vector(768) NOT NULL,
+    metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migration for existing tables
+ALTER TABLE public.document_chunks ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
 
 -- Chat Sessions table
 CREATE TABLE IF NOT EXISTS public.chat_sessions (
@@ -115,6 +119,9 @@ WITH CHECK (session_id IN (
 ));
 
 -- Helper RPC Function for Vector Similarity Search with Metadata & Workspace Isolation Filtering
+DROP FUNCTION IF EXISTS public.match_document_chunks(vector, float, int, uuid);
+DROP FUNCTION IF EXISTS public.match_document_chunks(vector, double precision, integer, uuid);
+
 CREATE OR REPLACE FUNCTION match_document_chunks (
   query_embedding vector(768),
   match_threshold float,
@@ -133,6 +140,7 @@ RETURNS TABLE (
   content text,
   section_path text,
   parent_section text,
+  metadata jsonb,
   similarity float
 )
 LANGUAGE plpgsql
@@ -152,6 +160,7 @@ BEGIN
     dc.content,
     dc.section_path,
     dc.parent_section,
+    dc.metadata,
     1 - (dc.embedding <=> query_embedding) AS similarity
   FROM public.document_chunks dc
   JOIN public.workspaces w ON dc.workspace_id = w.id

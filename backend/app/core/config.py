@@ -16,8 +16,9 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
     
-    # Auth Security
+    # Auth & CORS Security
     AUTH_ALLOW_DEV_FALLBACK: bool = False
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
     
     # Ingestion settings
     CHUNK_SIZE: int = 500

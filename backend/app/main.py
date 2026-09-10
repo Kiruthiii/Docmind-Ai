@@ -20,11 +20,24 @@ app = FastAPI(
     redoc_url=f"{settings.API_V1_STR}/redoc"
 )
 
-# Enable CORS for frontend integration
+# Configure production-ready CORS for frontend integrations (including Cloudflare Pages/Workers)
+raw_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+use_wildcard = "*" in raw_origins or not raw_origins
+
+if use_wildcard:
+    cors_origins = ["*"]
+    cors_allow_credentials = False
+    cors_origin_regex = None
+else:
+    cors_origins = raw_origins
+    cors_allow_credentials = True
+    cors_origin_regex = r"https://.*\.pages\.dev|https://.*\.cloudflare\.com"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_origin_regex=cors_origin_regex,
+    allow_credentials=cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
