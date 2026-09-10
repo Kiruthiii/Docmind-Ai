@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.db.supabase_client import _in_memory_db, get_supabase_client
 from app.services.llm_service import LLMService
@@ -13,39 +13,78 @@ class IngestionService:
         self.parser = PDFParser()
         self.llm = LLMService()
 
-    def process_pdf(self, workspace_id: str, filename: str, pdf_bytes: bytes, storage_path: str = "") -> Dict[str, Any]:
-        """Orchestrates PDF parsing, chunking, embedding generation, and DB storage."""
+    def process_pdf(
+        self,
+        workspace_id: str,
+        filename: str,
+        pdf_bytes: bytes,
+        storage_path: str = "",
+        access_token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Orchestrates PDF storage, parsing, chunking, embedding generation, and DB storage."""
         doc_id = str(uuid.uuid4())
         logger.info(f"Starting ingestion for document {filename} ({doc_id}) in workspace {workspace_id}")
 
-        # 1. Store initial Document status
+        actual_storage_path = storage_path or f"workspaces/{workspace_id}/{doc_id}.pdf"
+        client = get_supabase_client(access_token)
+
+        # 1. Upload PDF file binary to Supabase Storage (with auto-bucket creation & fallback)
+        if client:
+            try:
+                # Attempt to create documents bucket if it does not exist
+                try:
+                    client.storage.get_bucket("documents")
+                except Exception:
+                    try:
+                        client.storage.create_bucket("documents", options={"public": True})
+                    except Exception as b_err:
+                        logger.warning(f"Could not auto-create Supabase Storage bucket 'documents': {b_err}")
+
+                # Store PDF in Supabase Storage documents bucket
+                client.storage.from_("documents").upload(
+                    actual_storage_path,
+                    pdf_bytes,
+                    file_options={"content-type": "application/pdf", "upsert": "true"}
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Error uploading PDF file {filename} to Supabase Storage: {e}. "
+                    f"Caching binary in fallback memory storage for PDF preview."
+                )
+                _in_memory_db.pdf_bytes[doc_id] = pdf_bytes
+
+        # 2. Store initial Document status in database
         doc_record = {
             "id": doc_id,
             "workspace_id": workspace_id,
             "filename": filename,
-            "storage_path": storage_path or f"workspaces/{workspace_id}/{filename}",
+            "storage_path": actual_storage_path,
             "status": "processing",
             "page_count": 0,
             "created_at": "2026-08-24T20:00:00Z"
         }
 
-        client = get_supabase_client()
         if client:
             try:
                 client.table("documents").insert(doc_record).execute()
             except Exception as e:
                 logger.error(f"Error saving document record to Supabase: {e}")
-        
-        # Save to memory fallback
-        _in_memory_db.documents[doc_id] = doc_record
-        _in_memory_db.pdf_bytes[doc_id] = pdf_bytes
+                return {
+                    "document_id": doc_id,
+                    "filename": filename,
+                    "status": "failed",
+                    "error": f"Database insert failed: {e}"
+                }
+        else:
+            _in_memory_db.documents[doc_id] = doc_record
+            _in_memory_db.pdf_bytes[doc_id] = pdf_bytes
 
         try:
-            # 2. Parse PDF and extract text/tables
+            # 3. Parse PDF and extract text/tables
             parse_result = self.parser.parse_pdf_bytes(pdf_bytes, filename)
             doc_record["page_count"] = parse_result.page_count
 
-            # 3. Generate embeddings in batch & insert chunks
+            # 4. Generate embeddings in batch & insert chunks
             chunks_to_insert = []
             chunk_contents = [chunk.content for chunk in parse_result.chunks]
             embeddings = self.llm.get_embeddings_batch(chunk_contents) if chunk_contents else []
@@ -82,23 +121,19 @@ class IngestionService:
 
             if client and chunks_to_insert:
                 try:
-                    # Strip extra non-db helper fields for Supabase RPC insert
+                    # Strip non-db helper fields for Supabase table insert
                     db_payload = [{k: v for k, v in c.items() if k != "filename"} for c in chunks_to_insert]
                     client.table("document_chunks").insert(db_payload).execute()
                 except Exception as e:
                     logger.error(f"Error inserting chunks to Supabase: {e}")
+                    raise e
+            else:
+                _in_memory_db.document_chunks.extend(chunks_to_insert)
 
-            # Always sync with in-memory fallback
-            _in_memory_db.document_chunks.extend(chunks_to_insert)
-
-            # 4. Mark status ready
+            # 5. Mark document status ready
             doc_record["status"] = "ready"
-            doc_record["metadata"] = getattr(parse_result, "doc_metadata", {})
             if client:
-                try:
-                    client.table("documents").update({"status": "ready", "page_count": parse_result.page_count}).eq("id", doc_id).execute()
-                except Exception as e:
-                    logger.error(f"Error updating doc status in Supabase: {e}")
+                client.table("documents").update({"status": "ready", "page_count": parse_result.page_count}).eq("id", doc_id).execute()
 
             logger.info(f"Successfully processed {len(chunks_to_insert)} chunks for {filename}")
             return {
@@ -116,10 +151,11 @@ class IngestionService:
                 try:
                     client.table("documents").update({"status": "failed"}).eq("id", doc_id).execute()
                 except Exception as ex:
-                    logger.error(f"Error updating failed status: {ex}")
+                    logger.error(f"Error updating failed status in Supabase: {ex}")
             return {
                 "document_id": doc_id,
                 "filename": filename,
                 "status": "failed",
                 "error": str(e)
             }
+

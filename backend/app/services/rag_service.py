@@ -48,7 +48,8 @@ class RAGService:
         workspace_id: str,
         question: str,
         session_id: str = None,
-        show_sources: bool = True
+        show_sources: bool = True,
+        access_token: Optional[str] = None
     ) -> ChatMessageResponse:
         """Retrieves evidence and generates a grounded response using Multi-Agent Evidence-Sufficiency Pipeline."""
         if not session_id:
@@ -63,7 +64,8 @@ class RAGService:
             workspace_id=workspace_id,
             structured_query=structured_query,
             query_vector=query_vector,
-            top_k=settings.MAX_RETRIEVAL_CHUNKS
+            top_k=settings.MAX_RETRIEVAL_CHUNKS,
+            access_token=access_token
         )
 
         # 3. Agent 4: Evidence Assembly
@@ -88,7 +90,8 @@ class RAGService:
                 workspace_id=workspace_id,
                 structured_query=reformulated_query,
                 query_vector=query_vector,
-                top_k=settings.MAX_RETRIEVAL_CHUNKS
+                top_k=settings.MAX_RETRIEVAL_CHUNKS,
+                access_token=access_token
             )
             assembly_result = self.assembly_agent.assemble_evidence_context(retry_candidates)
             validation_result = self.validation_agent.validate_evidence(
@@ -141,9 +144,9 @@ class RAGService:
         print(json.dumps(diag_matrix, indent=2))
         print("=================================================================\n")
 
-        # Save to chat history
-        self._save_message(session_id, "user", question)
-        self._save_message(session_id, "assistant", answer_text, citations)
+        # Save user and assistant messages to chat history in Supabase
+        self._save_message(session_id, workspace_id, "user", question, access_token=access_token)
+        self._save_message(session_id, workspace_id, "assistant", answer_text, citations, access_token=access_token)
 
         return ChatMessageResponse(
             session_id=session_id,
@@ -157,14 +160,15 @@ class RAGService:
         self,
         workspace_id: str,
         document_ids: List[str] = None,
-        categories: List[str] = None
+        categories: List[str] = None,
+        access_token: Optional[str] = None
     ) -> ComparisonResponse:
         """Performs multi-document analysis and comparison matrix generation."""
         if not categories:
             categories = ["Summary", "Methodology", "Results", "Advantages", "Limitations"]
 
-        # Fetch chunks for workspace
-        chunks = self._get_all_workspace_chunks(workspace_id, document_ids)
+        # Fetch chunks for workspace from Supabase
+        chunks = self._get_all_workspace_chunks(workspace_id, document_ids, access_token=access_token)
         workspace_name = "Selected Workspace Documents"
 
         matrix_md, contradictions = self.llm.generate_comparison_matrix(workspace_name, chunks, categories)
@@ -380,7 +384,6 @@ class RAGService:
         target_section = getattr(query_intent, "target_section", "any") if query_intent else "any"
         query_type = getattr(query_intent, "query_type", "specific_fact") if query_intent else "specific_fact"
 
-        # 1. Target Section Filtering (Fixes Bug #1: Discards page 27 / reference section for "introduction" queries)
         if target_section and target_section != "any":
             target_sec_lower = target_section.lower()
             section_matching_chunks = []
@@ -388,7 +391,6 @@ class RAGService:
                 pos = (c.get("document_position") or c.get("metadata", {}).get("document_position") or "").lower()
                 p_sec = (c.get("parent_section") or c.get("metadata", {}).get("parent_section") or "").lower()
                 s_path = (c.get("section_path") or c.get("metadata", {}).get("section_path") or "").lower()
-                content = c.get("content", "").lower()
                 page_num = c.get("page_number", 1)
 
                 is_target_pos = pos == target_sec_lower
@@ -401,7 +403,6 @@ class RAGService:
             if section_matching_chunks:
                 candidate_chunks = section_matching_chunks
 
-        # 2. Visual Analysis / Table / Chart Filtering (Fixes Bug #6)
         if query_type == "visual_analysis" or any(k in question.lower() for k in ["table", "figure", "fig", "chart", "diagram"]):
             visual_chunks = [
                 c for c in candidate_chunks
@@ -485,8 +486,29 @@ class RAGService:
 
         return candidate_chunks[:3]
 
-    def _get_all_workspace_chunks(self, workspace_id: str, document_ids: List[str] = None) -> List[Dict[str, Any]]:
-        chunks = [c for c in _in_memory_db.document_chunks if c.get("workspace_id") == workspace_id]
+    def _get_all_workspace_chunks(self, workspace_id: str, document_ids: List[str] = None, access_token: Optional[str] = None) -> List[Dict[str, Any]]:
+        client = get_supabase_client(access_token)
+        chunks = []
+        doc_map = {}
+
+        if client:
+            try:
+                # Fetch filenames
+                docs_res = client.table("documents").select("id, filename").eq("workspace_id", workspace_id).execute()
+                if docs_res.data:
+                    doc_map = {d["id"]: d["filename"] for d in docs_res.data}
+
+                res_db = client.table("document_chunks").select("*").eq("workspace_id", workspace_id).execute()
+                if res_db.data:
+                    chunks = res_db.data
+                    for c in chunks:
+                        c["filename"] = doc_map.get(c.get("document_id"), "Document")
+            except Exception as e:
+                logger.warning(f"Error fetching workspace chunks from Supabase: {e}")
+
+        if not chunks:
+            chunks = [c for c in _in_memory_db.document_chunks if c.get("workspace_id") == workspace_id]
+
         if document_ids:
             chunks = [c for c in chunks if c.get("document_id") in document_ids]
         return chunks
@@ -512,13 +534,36 @@ class RAGService:
                 ))
         return citations
 
-    def _save_message(self, session_id: str, role: str, content: str, citations: List[Citation] = None):
+    def _save_message(self, session_id: str, workspace_id: str, role: str, content: str, citations: List[Citation] = None, access_token: Optional[str] = None):
+        client = get_supabase_client(access_token) if access_token else None
+        msg_id = str(uuid.uuid4())
         msg_record = {
-            "id": str(uuid.uuid4()),
+            "id": msg_id,
             "session_id": session_id,
             "role": role,
             "content": content,
             "citations": [c.model_dump() for c in (citations or [])],
             "created_at": "2026-08-24T20:00:00Z"
         }
+
+        if client:
+            try:
+                # 1. Ensure chat session row exists in chat_sessions table
+                sess_res = client.table("chat_sessions").select("id").eq("id", session_id).execute()
+                if not sess_res.data:
+                    session_record = {
+                        "id": session_id,
+                        "workspace_id": workspace_id,
+                        "title": "New Chat",
+                        "created_at": "2026-08-24T20:00:00Z"
+                    }
+                    client.table("chat_sessions").insert(session_record).execute()
+
+                # 2. Insert chat message into messages table
+                client.table("messages").insert(msg_record).execute()
+            except Exception as e:
+                logger.error(f"Error saving chat session / message to Supabase: {e}")
+
+        # Keep memory sync for local mock tests
+        _in_memory_db.chat_sessions[session_id] = {"id": session_id, "workspace_id": workspace_id}
         _in_memory_db.messages.append(msg_record)

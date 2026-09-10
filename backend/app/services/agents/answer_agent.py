@@ -57,7 +57,13 @@ class AnswerIntelligenceAgent:
             "based on the context,",
             "based on the document,",
             "according to the provided context,",
-            "according to the provided document,"
+            "according to the provided document,",
+            "sure,",
+            "sure!",
+            "certainly,",
+            "certainly!",
+            "i'd be happy to help.",
+            "i'd be happy to answer."
         ]
         for prefix in FILLER_PREFIXES:
             if cleaned.lower().startswith(prefix):

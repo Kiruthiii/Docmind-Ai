@@ -10,7 +10,7 @@ interface ProtectedRouteProps {
 }
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
-  const { session, loading } = useAuth();
+  const { session, loading, isPasswordRecovery } = useAuth();
 
   if (loading) {
     return (
@@ -27,6 +27,10 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
         </div>
       </div>
     );
+  }
+
+  if (isPasswordRecovery) {
+    return <Navigate to="/reset-password" replace />;
   }
 
   if (!session) {

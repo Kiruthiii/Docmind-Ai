@@ -350,7 +350,10 @@ class LLMService:
         }
 
     def _select_minimal_evidence(self, question: str, scope: str, context_chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Selects minimal sufficient evidence chunks based on query scope."""
+        """Selects minimal sufficient evidence chunks based on semantic similarity and query scope."""
+        if not context_chunks:
+            return []
+
         q_lower = question.lower()
         if any(k in q_lower for k in ["title", "author", "authors", "publication date", "published", "who wrote"]):
             header_chunks = [c for c in context_chunks if c.get("chunk_type") == "header" or (c.get("parent_section") or "").upper() == "HEADER" or c.get("page_number", 1) == 1]
@@ -367,12 +370,6 @@ class LLMService:
             ]
             if exact_matching:
                 return exact_matching[:4]
-            else:
-                # Requested target entity (e.g. Table 1) is not present in context_chunks
-                return []
-
-        if scope == "EXISTENCE_QUERY":
-            return context_chunks[:4]
 
         if scope in ("DOCUMENT_META", "DOCUMENT_OVERVIEW"):
             non_ref_chunks = [
@@ -384,48 +381,18 @@ class LLMService:
         if scope in ("TABLE_QUERY", "VISUAL_QUERY"):
             marker = "table" if scope == "TABLE_QUERY" else "fig"
             matching_chunks = [c for c in context_chunks if marker in c.get("content", "").lower() or c.get("chunk_type") == marker]
-            return matching_chunks if matching_chunks else context_chunks[:2]
+            if matching_chunks:
+                return matching_chunks[:4]
 
-        q_terms = get_clean_q_terms(question)
+        # Rank context chunks by semantic similarity score
+        sorted_chunks = sorted(
+            context_chunks,
+            key=lambda x: x.get("similarity", x.get("hybrid_score", 0.5)),
+            reverse=True
+        )
 
-        if scope in ("FACT_LOOKUP", "NARROW_FACTUAL"):
-            GENERIC_ATTR_WORDS = {
-                "what", "is", "are", "the", "a", "an", "of", "in", "for", "to", "with", "on", "at", "from", "by", "my", "your",
-                "show", "me", "can", "you", "tell", "give", "list", "does", "do", "did", "how", "why", "which",
-                "duration", "time", "period", "length", "date", "when", "where", "who", "cost", "price", "value", "score", "gpa", "cgpa",
-                "internship", "internships", "experience", "education", "project", "projects", "job", "role", "work", "training", "details"
-            }
-            words = [w for w in question.split() if w.lower() not in STOP_WORDS]
-            entity_terms = [CLEAN_WORD_RE.sub('', w.lower()) for w in words if CLEAN_WORD_RE.sub('', w.lower()) not in GENERIC_ATTR_WORDS and len(CLEAN_WORD_RE.sub('', w.lower())) >= 3]
-
-            if entity_terms:
-                scored_entity_chunks = []
-                for chunk in context_chunks:
-                    content_lower = chunk.get("content", "").lower()
-                    chunk_words = set(TOKEN_RE.findall(content_lower))
-                    match_count = sum(1 for et in entity_terms if term_matches_words(et, chunk_words, chunk.get("content", "")))
-                    if match_count > 0:
-                        scored_entity_chunks.append((match_count, chunk))
-
-                if scored_entity_chunks:
-                    scored_entity_chunks.sort(key=lambda x: x[0], reverse=True)
-                    top_score = scored_entity_chunks[0][0]
-                    best_chunks = [c for score, c in scored_entity_chunks if score >= top_score]
-                    return best_chunks[:4]
-
-            return context_chunks[:3]
-
-        if scope in ("SECTION_QUERY", "DISTRIBUTED_QUERY", "ENTITY_LIST", "COMPARISON"):
-            valid_chunks = [
-                c for c in context_chunks
-                if not any(r in (c.get("parent_section") or "").lower() or r in (c.get("section_path") or "").lower() or r in c.get("content", "").lower()[:100] for r in NOISE_SECTION_MARKERS)
-            ]
-            if not valid_chunks:
-                valid_chunks = context_chunks
-
-            return valid_chunks[:5]
-
-        return context_chunks[:4]
+        max_k = 6 if scope in ("SECTION_QUERY", "DISTRIBUTED_QUERY", "ENTITY_LIST", "COMPARISON") else 4
+        return sorted_chunks[:max_k]
 
     def _validate_claims_and_relevance(
         self,
@@ -484,21 +451,14 @@ class LLMService:
                 return (refusal_phrase, False, [], {"sufficient_evidence": False, "grounded": False, "relevant": False})
 
         answer_type = contract["answer_type"]
-        answer_relevant = True
+        q_lower = question.lower()
 
+        # Semantic Question-Answer Relevance Check
         if answer_type == "concise_fact":
-            q_lower = question.lower()
             if "duration" in q_lower or "how long" in q_lower:
-                if not any(w in raw_answer.lower() for w in ["month", "year", "week", "day", "hour", "period"]):
-                    answer_relevant = False
-
-        if answer_type == "document_meta":
-            if not any(w in raw_answer.lower() for w in ["resume", "paper", "contract", "agreement", "report", "manual", "specification", "invoice", "document"]):
-                answer_relevant = False
-
-        if not answer_relevant:
-            logger.warning(f"Answer failed relevance validation for contract '{answer_type}': '{raw_answer}'")
-            return (refusal_phrase, False, [], {"sufficient_evidence": True, "grounded": True, "relevant": False})
+                if not any(w in raw_answer.lower() for w in ["month", "year", "week", "day", "hour", "period", "time", "present", "date", "202", "201", "200"]):
+                    logger.warning(f"Answer failed duration relevance check: '{raw_answer}'")
+                    return (refusal_phrase, False, [], {"sufficient_evidence": True, "grounded": False, "relevant": False})
 
         if answer_type in ("concise_fact", "document_meta"):
             raw_answer = self._sanitize_narrow_answer(question, raw_answer, context_chunks)
@@ -548,9 +508,9 @@ class LLMService:
         context_str = "\n\n".join(context_blocks)
 
         system_instruction = (
-            "You are DocMind AI, an expert document intelligence assistant.\n"
-            "IMPORTANT DISTINCTION: 'DocMind AI' is your assistant software identity. The document context provided comes from the user's uploaded file.\n"
-            "CRITICAL PRINCIPLE: Base every single detail strictly on the provided document context.\n\n"
+            "You are DocMind AI, an expert document intelligence assistant capable of deep semantic context understanding.\n"
+            "IMPORTANT DISTINCTION: 'DocMind AI' is your software identity. The document context provided comes from the user's uploaded file.\n"
+            "CRITICAL GOAL: Fully comprehend the complete intent, semantic context, paraphrases, domain synonyms, calculations, tables, and multi-part aspects of the user's question, and answer accurately from the provided document context.\n\n"
             "STRICT JSON OUTPUT REQUIREMENT:\n"
             "You MUST respond ONLY with a valid JSON object matching this schema:\n"
             "{\n"
@@ -567,13 +527,13 @@ class LLMService:
             f"ANSWER CONTRACT ({contract['answer_type']}):\n"
             f"{contract['format_instruction']}\n\n"
             "RULES:\n"
-            "1. CONTEXT UNDERSTANDING: Analyze the user's query context to identify the specific target entity (e.g. company, paper, section, table, figure) and exact requested attribute.\n"
-            "2. EXACT & MINIMAL ANSWER: Output ONLY the exact factual information requested. Do NOT include unasked surrounding sections or unrelated tables.\n"
-            "3. NO EXTRA INFORMATION: Do NOT add conversational preamble ('Based on...'), system commentary, or unasked bullet points.\n"
-            "4. DOCUMENT IDENTIFICATION (document_meta): Infer document type strictly from document structure and text.\n"
-            "5. STRICT GROUNDING & ABSTENTION: If context contains NO relevant evidence for the specific requested item (e.g. requested Table 1 but context only has Table 9 or Table 12), set 'sufficient_evidence': false, 'answer': "
+            "1. SEMANTIC CONTEXT UNDERSTANDING: Analyze the user query context deeply. Understand synonyms, paraphrased questions, conceptual inquiries, calculations, and table structures without requiring exact word matches.\n"
+            "2. MULTI-PART & MULTI-CHUNK SYNTHESIS: If the query has multiple parts or requires combining information across chunks, address each part thoroughly grounded in context.\n"
+            "3. STRICT GROUNDING & NO HALLUCINATIONS: Base every single detail strictly on the provided document context. Never invent unsupported facts.\n"
+            "4. INSIGHTFUL & DIRECT: For direct factual questions output the exact direct statement. For summaries or explanations synthesize clearly without conversational preamble ('Based on the provided document...').\n"
+            "5. INSIGHTFUL ABSTENTION: If context contains NO evidence for the requested question, set 'sufficient_evidence': false, 'answer': "
             f"'{refusal_phrase}', and 'claims': [].\n"
-            "6. CLAIM EVIDENCE MAPPING: Attach evidence_ids ONLY for chunks that directly support each claim."
+            "6. CLAIM EVIDENCE MAPPING: Attach evidence_ids for chunks that support each claim."
         )
 
         prompt = f"PROVIDED DOCUMENT CONTEXT:\n{context_str}\n\nUSER QUESTION: {question}"
@@ -861,7 +821,7 @@ class LLMService:
             return (answer, True, context_chunks[:2])
 
         # Special fallback handler for DOCUMENT_OVERVIEW queries ("What is this paper about?")
-        if query_scope == "DOCUMENT_OVERVIEW" or any(k in question.lower() for k in ["summarize", "overview", "what does"]):
+        if query_scope == "DOCUMENT_OVERVIEW" or any(k in question.lower() for k in ["summarize paper", "overall overview", "paper summary", "main summary"]):
             doc_name = context_chunks[0].get("filename", "Document") if context_chunks else "Document"
             overview_lines = []
             for chunk in context_chunks[:4]:
@@ -950,6 +910,18 @@ class LLMService:
             if is_relevant:
                 relevant_chunks.append(chunk)
 
+        GENERIC_QUERY_TERMS = {"system", "model", "paper", "method", "approach", "data", "text", "document", "use", "used", "using", "work", "deploying", "deployed", "make", "made", "study", "this", "that", "it", "role", "roles", "internship", "internships", "experience", "detail", "details", "information", "about", "tell"}
+        specific_q_terms = [t for t in q_terms if t.lower() not in GENERIC_QUERY_TERMS]
+
+        if specific_q_terms:
+            matching_chunks_for_specific = [
+                c for c in context_chunks
+                if any(matches_text(st, c.get("content", "").lower()) or matches_text(st, (c.get("parent_section") or "").lower()) or matches_text(st, (c.get("section_path") or "").lower()) for st in specific_q_terms)
+            ]
+            if not matching_chunks_for_specific:
+                return (refusal_phrase, False, [])
+            relevant_chunks = matching_chunks_for_specific
+
         if not relevant_chunks:
             if q_terms:
                 return (refusal_phrase, False, [])
@@ -1013,7 +985,7 @@ class LLMService:
             for l in lines:
                 raw_l = l.strip()
                 clean_l = re.sub(r'^[\-\=\*\_\s\:\.\#]+|[\-\=\*\_\s\:\.\#]+$', '', raw_l).strip()
-                if not clean_l or clean_l.isupper() or all(c in "-------======******______ " for c in raw_l) or raw_l.startswith("Section:"):
+                if not clean_l or (clean_l.isupper() and len(clean_l) > 35) or all(c in "-------======******______ " for c in raw_l) or raw_l.startswith("Section:"):
                     continue
                 if raw_l.startswith("#"):
                     if target_ent and not chunk_contains_target_entity(raw_l, target_ent[0], target_ent[1]):
@@ -1032,14 +1004,16 @@ class LLMService:
                     continue
                 chunk_matched_lines.append(raw_l)
 
-            if query_scope in ("FACT_LOOKUP", "NARROW_FACTUAL") and q_terms:
+            if query_scope in ("FACT_LOOKUP", "NARROW_FACTUAL", "SECTION_QUERY", "TECHNICAL_EXPLANATION") and q_terms:
                 GENERIC_ATTR_WORDS = {
                     "what", "is", "are", "the", "a", "an", "of", "in", "for", "to", "with", "on", "at", "from", "by", "my", "your",
                     "show", "me", "can", "you", "tell", "give", "list", "does", "do", "did", "how", "why", "which",
-                    "duration", "time", "period", "length", "date", "when", "where", "who", "cost", "price", "value", "score", "gpa", "cgpa",
-                    "internship", "internships", "experience", "education", "project", "projects", "job", "role", "work", "training", "details"
+                    "duration", "time", "period", "length", "date", "when", "where", "who", "cost", "price", "value", "score", "gpa", "cgpa", "details",
+                    "internship", "internships", "experience", "education", "project", "projects", "job", "role", "roles", "work", "training"
                 }
                 entity_terms = [t for t in q_terms if t.lower() not in GENERIC_ATTR_WORDS and len(t) >= 3]
+                if not entity_terms:
+                    entity_terms = [t for t in q_terms if len(t) >= 3]
 
                 expanded_q_terms = list(q_terms)
                 for qt in q_terms:
@@ -1064,12 +1038,25 @@ class LLMService:
                         has_entity_match = any(any(matches_text(et, chunk_matched_lines[idx].lower()) for et in entity_terms) for idx in scoped_indices)
                         if has_entity_match:
                             entity_scoped = set()
-                            for idx in scoped_indices:
-                                if any(matches_text(et, chunk_matched_lines[idx].lower()) for et in entity_terms):
+                            curr_section_matched = False
+                            for idx in range(len(chunk_matched_lines)):
+                                line_str = chunk_matched_lines[idx].strip()
+                                line_low = line_str.lower()
+                                is_section_hdr = (line_str.isupper() and len(line_str) > 3) or line_str.endswith(":") or line_str.startswith("#") or line_str.startswith("Section:") or any(line_str.startswith(k) for k in ["Bachelor", "Master", "PhD", "Education", "Skills", "Projects", "Certificat"])
+                                if is_section_hdr:
+                                    curr_section_matched = any(matches_text(et, line_low) for et in entity_terms)
+                                if any(matches_text(et, line_low) for et in entity_terms):
                                     entity_scoped.add(idx)
                                     if idx + 1 < len(chunk_matched_lines):
-                                        entity_scoped.add(idx + 1)
+                                        next_line = chunk_matched_lines[idx + 1].strip()
+                                        is_next_hdr = (next_line.isupper() and len(next_line) > 3) or next_line.endswith(":") or next_line.startswith("#") or any(next_line.startswith(k) for k in ["Bachelor", "Master", "PhD", "Education", "Skills", "Projects", "Certificat"])
+                                        if not is_next_hdr:
+                                            entity_scoped.add(idx + 1)
+                                elif curr_section_matched and idx in scoped_indices:
+                                    entity_scoped.add(idx)
                             scoped_indices = entity_scoped
+                        else:
+                            scoped_indices = set()
 
                     chunk_matched_lines = [chunk_matched_lines[i] for i in sorted(scoped_indices)]
 

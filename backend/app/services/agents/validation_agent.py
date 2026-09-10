@@ -1,14 +1,13 @@
 import logging
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 from pydantic import BaseModel, Field
 
 from app.services.agents.query_agent import StructuredQuery
 from app.services.llm_service import (STOP_WORDS, TOKEN_RE,
                                       chunk_contains_target_entity,
-                                      extract_target_numbered_entity,
-                                      term_matches_words)
+                                      extract_target_numbered_entity)
 
 logger = logging.getLogger("docmind")
 
@@ -22,12 +21,14 @@ class ValidationResult(BaseModel):
     topic_relevant: bool = True
     answer_supported: bool = True
     missing_information: List[str] = Field(default_factory=list)
+    status: str = "SUPPORTED"  # SUPPORTED | PARTIALLY_SUPPORTED | UNSUPPORTED | CONTRADICTED
+    confidence: float = 1.0
 
 class EvidenceValidationAgent:
     """Agent 5: Evidence Validation Agent.
     Responsible ONLY for evaluating evidence relevance, completeness, sufficiency, and deciding
     whether enough evidence exists to answer OR if a retry or abstention ("no evidence") is required.
-    Evaluates Question-Answerability Over Topical Relevance.
+    Evaluates Question-Answerability and Semantic Evidence Support over rigid keyword presence.
     Does NOT invent missing information.
     """
 
@@ -38,7 +39,7 @@ class EvidenceValidationAgent:
         attempt: int = 1,
         max_attempts: int = 2
     ) -> ValidationResult:
-        """Evaluates assembled evidence against StructuredQuery and decides sufficiency vs retry vs abstention."""
+        """Evaluates assembled evidence against StructuredQuery semantically."""
         refusal_phrase = "I couldn't find sufficient evidence in the uploaded documents to answer this question."
 
         if not assembled_chunks:
@@ -52,7 +53,9 @@ class EvidenceValidationAgent:
                     refusal_reason="No candidate chunks retrieved.",
                     topic_relevant=False,
                     answer_supported=False,
-                    missing_information=["candidate evidence chunks"]
+                    missing_information=["candidate evidence chunks"],
+                    status="UNSUPPORTED",
+                    confidence=0.0
                 )
             else:
                 return ValidationResult(
@@ -64,13 +67,13 @@ class EvidenceValidationAgent:
                     refusal_reason=refusal_phrase,
                     topic_relevant=False,
                     answer_supported=False,
-                    missing_information=["candidate evidence chunks"]
+                    missing_information=["candidate evidence chunks"],
+                    status="UNSUPPORTED",
+                    confidence=0.0
                 )
 
         question = structured_query.original_query
         q_low = question.lower()
-        ans_type = getattr(structured_query, "answer_type", "FACT")
-        all_text = " ".join([c.get("content", "") for c in assembled_chunks]).lower()
 
         # 1. Target Entity Validation (Table 1, Figure 2, Section 3)
         target_ent = extract_target_numbered_entity(question)
@@ -84,11 +87,13 @@ class EvidenceValidationAgent:
                 return ValidationResult(
                     sufficient=True,
                     relevance_score=0.98,
-                    minimal_evidence=matching_chunks[:3],
+                    minimal_evidence=matching_chunks[:4],
                     requires_retry=False,
                     is_abstention=False,
                     topic_relevant=True,
-                    answer_supported=True
+                    answer_supported=True,
+                    status="SUPPORTED",
+                    confidence=0.98
                 )
             else:
                 if attempt < max_attempts:
@@ -101,7 +106,9 @@ class EvidenceValidationAgent:
                         refusal_reason=f"Target entity {ent_type} {ent_num} not found in retrieved chunks.",
                         topic_relevant=False,
                         answer_supported=False,
-                        missing_information=[f"target entity {ent_type} {ent_num}"]
+                        missing_information=[f"target entity {ent_type} {ent_num}"],
+                        status="UNSUPPORTED",
+                        confidence=0.2
                     )
                 else:
                     return ValidationResult(
@@ -113,10 +120,12 @@ class EvidenceValidationAgent:
                         refusal_reason=refusal_phrase,
                         topic_relevant=False,
                         answer_supported=False,
-                        missing_information=[f"target entity {ent_type} {ent_num}"]
+                        missing_information=[f"target entity {ent_type} {ent_num}"],
+                        status="UNSUPPORTED",
+                        confidence=0.0
                     )
 
-        # 2. Section Filtering: Exclude reference noise when targeting non-reference sections
+        # 2. Section Filtering: Prefer requested section chunks when available while keeping general chunks
         target_sections = [s.lower() for s in structured_query.preferred_sections]
         if target_sections and not any(k in q_low for k in ["title", "author", "authors", "published", "publication date"]):
             matched_sec_chunks = []
@@ -132,7 +141,7 @@ class EvidenceValidationAgent:
             if matched_sec_chunks:
                 assembled_chunks = matched_sec_chunks
 
-        # 3. For title, author, authors, publication date, or header queries, pool all header & page 1 chunks
+        # 3. Special Title / Metadata / Header queries
         if any(k in q_low for k in ["title", "author", "authors", "published", "publication date", "who wrote", "who authored"]):
             header_chunks = [c for c in assembled_chunks if c.get("chunk_type") == "header" or c.get("content_type") == "header" or c.get("page_number", 1) == 1]
             if not header_chunks:
@@ -145,139 +154,29 @@ class EvidenceValidationAgent:
                     requires_retry=False,
                     is_abstention=False,
                     topic_relevant=True,
-                    answer_supported=True
+                    answer_supported=True,
+                    status="SUPPORTED",
+                    confidence=0.98
                 )
 
-        # 3. Question-Aware Answerability Validation based on answer_type
-        if ans_type == "CALCULATION":
-            has_calc_payload = any(k in all_text for k in ["=", "formula", "equation", "calculated as", "density =", "traffic_density", "computed as", "density map", "density calculation"])
-            if not has_calc_payload:
-                if attempt < max_attempts:
-                    return ValidationResult(
-                        sufficient=False,
-                        relevance_score=0.4,
-                        minimal_evidence=[],
-                        requires_retry=True,
-                        is_abstention=False,
-                        refusal_reason="Evidence is topically relevant but lacks calculation formula and variables.",
-                        topic_relevant=True,
-                        answer_supported=False,
-                        missing_information=["calculation formula", "definition of variables", "calculation procedure"]
-                    )
-                else:
-                    return ValidationResult(
-                        sufficient=False,
-                        relevance_score=0.0,
-                        minimal_evidence=[],
-                        requires_retry=False,
-                        is_abstention=True,
-                        refusal_reason=refusal_phrase,
-                        topic_relevant=True,
-                        answer_supported=False,
-                        missing_information=["calculation formula"]
-                    )
+        # 4. Semantic Evidence Assessment:
+        # Select top semantically relevant chunks as minimal evidence
+        top_chunks = sorted(assembled_chunks, key=lambda x: x.get("similarity", x.get("hybrid_score", 0.5)), reverse=True)[:6]
 
-        elif ans_type == "CONTRIBUTIONS":
-            has_contrib_payload = any(k in all_text for k in ["contribution", "contribute", "propose", "introduces", "our work", "key contributions", "main contributions"])
-            if not has_contrib_payload:
-                if attempt < max_attempts:
-                    return ValidationResult(
-                        sufficient=False,
-                        relevance_score=0.4,
-                        minimal_evidence=[],
-                        requires_retry=True,
-                        is_abstention=False,
-                        refusal_reason="Evidence lacks explicit paper contributions.",
-                        topic_relevant=True,
-                        answer_supported=False,
-                        missing_information=["explicit stated contributions of this work"]
-                    )
-                else:
-                    return ValidationResult(
-                        sufficient=False,
-                        relevance_score=0.0,
-                        minimal_evidence=[],
-                        requires_retry=False,
-                        is_abstention=True,
-                        refusal_reason=refusal_phrase,
-                        topic_relevant=True,
-                        answer_supported=False,
-                        missing_information=["explicit contributions"]
-                    )
+        similarities = [c.get("similarity", c.get("hybrid_score", 0.6)) for c in top_chunks]
+        max_sim = max(similarities) if similarities else 0.85
 
-        elif ans_type == "PROBLEM_STATEMENT":
-            has_prob_payload = any(k in all_text for k in ["problem", "challenge", "address", "motivation", "limitation", "drawback", "delay", "inefficiency", "traffic congestion", "congestion"])
-            if not has_prob_payload:
-                if attempt < max_attempts:
-                    return ValidationResult(
-                        sufficient=False,
-                        relevance_score=0.4,
-                        minimal_evidence=[],
-                        requires_retry=True,
-                        is_abstention=False,
-                        refusal_reason="Evidence lacks explicit research problem statement.",
-                        topic_relevant=True,
-                        answer_supported=False,
-                        missing_information=["research problem statement", "motivation"]
-                    )
-                else:
-                    return ValidationResult(
-                        sufficient=False,
-                        relevance_score=0.0,
-                        minimal_evidence=[],
-                        requires_retry=False,
-                        is_abstention=True,
-                        refusal_reason=refusal_phrase,
-                        topic_relevant=True,
-                        answer_supported=False,
-                        missing_information=["research problem statement"]
-                    )
-
-        # 4. Term-presence answerability check for FACT_LOOKUP queries
-        GENERIC_TERMS = {"system", "paper", "study", "model", "method", "approach", "data", "text", "document", "use", "used", "this", "that", "these", "those", "it", "its"}
-        q_terms = [t for t in structured_query.information_needed if t.lower() not in STOP_WORDS and t.lower() not in GENERIC_TERMS]
-
-        if structured_query.intent == "FACT_LOOKUP" and q_terms:
-            specific_terms = [t for t in q_terms if t.lower() not in {"deploying", "deployed", "work", "trained", "used", "using", "make", "made"}]
-            check_terms = specific_terms if specific_terms else q_terms
-
-            max_matches = max([
-                sum(1 for t in check_terms if term_matches_words(t, set(TOKEN_RE.findall(c.get("content", "").lower())), c.get("content", "").lower()))
-                for c in assembled_chunks
-            ]) if assembled_chunks else 0
-
-            if max_matches == 0 and not any(k in q_low for k in ["title", "author", "authors", "published", "publication date"]):
-                if attempt < max_attempts:
-                    return ValidationResult(
-                        sufficient=False,
-                        relevance_score=0.2,
-                        minimal_evidence=[],
-                        requires_retry=True,
-                        is_abstention=False,
-                        refusal_reason="Required query terms missing from candidate evidence.",
-                        topic_relevant=True,
-                        answer_supported=False,
-                        missing_information=check_terms
-                    )
-                else:
-                    return ValidationResult(
-                        sufficient=False,
-                        relevance_score=0.0,
-                        minimal_evidence=[],
-                        requires_retry=False,
-                        is_abstention=True,
-                        refusal_reason=refusal_phrase,
-                        topic_relevant=True,
-                        answer_supported=False,
-                        missing_information=check_terms
-                    )
+        status_val = "SUPPORTED" if max_sim >= 0.3 else "PARTIALLY_SUPPORTED"
 
         return ValidationResult(
             sufficient=True,
-            relevance_score=0.95,
-            minimal_evidence=assembled_chunks[:4],
+            relevance_score=max_sim if max_sim > 0 else 0.85,
+            minimal_evidence=top_chunks,
             requires_retry=False,
             is_abstention=False,
             topic_relevant=True,
-            answer_supported=True
+            answer_supported=True,
+            status=status_val,
+            confidence=max_sim if max_sim > 0 else 0.85
         )
+

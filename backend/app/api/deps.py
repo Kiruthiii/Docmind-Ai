@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import Depends, HTTPException, Security, status
+from fastapi import Depends, HTTPException, Query, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import settings
@@ -10,22 +10,28 @@ from app.db.supabase_client import get_supabase_client
 logger = logging.getLogger("docmind")
 security = HTTPBearer(auto_error=False)
 
-def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Security(security)) -> Dict[str, Any]:
-    token: Optional[str] = None
+def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security),
+    token: Optional[str] = Query(None)
+) -> Dict[str, Any]:
+    auth_token: Optional[str] = None
     if credentials and credentials.credentials:
-        token = credentials.credentials
+        auth_token = credentials.credentials
+    elif token:
+        auth_token = token
 
-    if token:
+    if auth_token:
         client = get_supabase_client()
         if client:
             try:
-                user_res = client.auth.get_user(token)
+                user_res = client.auth.get_user(auth_token)
                 if user_res and user_res.user:
                     user = user_res.user
                     return {
                         "id": str(user.id),
                         "email": getattr(user, "email", ""),
                         "user_metadata": getattr(user, "user_metadata", {}) or {},
+                        "token": auth_token,
                     }
             except Exception as e:
                 logger.warning(f"Failed to verify Supabase token: {e}")
@@ -37,6 +43,7 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Secur
             "id": "00000000-0000-0000-0000-000000000001",
             "email": "demo@docmind.ai",
             "user_metadata": {"full_name": "Demo Student User"},
+            "token": None,
         }
 
     # Strict production requirement: Rejects missing/invalid token with 401 Unauthorized

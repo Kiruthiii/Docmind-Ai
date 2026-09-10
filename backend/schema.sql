@@ -75,7 +75,46 @@ ALTER TABLE public.document_chunks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.chat_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 
--- Helper RPC Function for Vector Similarity Search with Metadata Filtering
+-- Row Level Security Policies for Authenticated Users
+DROP POLICY IF EXISTS "Users manage own workspaces" ON public.workspaces;
+CREATE POLICY "Users manage own workspaces" ON public.workspaces
+FOR ALL TO authenticated
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
+
+DROP POLICY IF EXISTS "Users manage documents in own workspaces" ON public.documents;
+CREATE POLICY "Users manage documents in own workspaces" ON public.documents
+FOR ALL TO authenticated
+USING (workspace_id IN (SELECT id FROM public.workspaces WHERE user_id = auth.uid()))
+WITH CHECK (workspace_id IN (SELECT id FROM public.workspaces WHERE user_id = auth.uid()));
+
+DROP POLICY IF EXISTS "Users manage document chunks in own workspaces" ON public.document_chunks;
+CREATE POLICY "Users manage document chunks in own workspaces" ON public.document_chunks
+FOR ALL TO authenticated
+USING (workspace_id IN (SELECT id FROM public.workspaces WHERE user_id = auth.uid()))
+WITH CHECK (workspace_id IN (SELECT id FROM public.workspaces WHERE user_id = auth.uid()));
+
+DROP POLICY IF EXISTS "Users manage chat sessions in own workspaces" ON public.chat_sessions;
+CREATE POLICY "Users manage chat sessions in own workspaces" ON public.chat_sessions
+FOR ALL TO authenticated
+USING (workspace_id IN (SELECT id FROM public.workspaces WHERE user_id = auth.uid()))
+WITH CHECK (workspace_id IN (SELECT id FROM public.workspaces WHERE user_id = auth.uid()));
+
+DROP POLICY IF EXISTS "Users manage messages in own workspaces" ON public.messages;
+CREATE POLICY "Users manage messages in own workspaces" ON public.messages
+FOR ALL TO authenticated
+USING (session_id IN (
+    SELECT cs.id FROM public.chat_sessions cs
+    JOIN public.workspaces w ON cs.workspace_id = w.id
+    WHERE w.user_id = auth.uid()
+))
+WITH CHECK (session_id IN (
+    SELECT cs.id FROM public.chat_sessions cs
+    JOIN public.workspaces w ON cs.workspace_id = w.id
+    WHERE w.user_id = auth.uid()
+));
+
+-- Helper RPC Function for Vector Similarity Search with Metadata & Workspace Isolation Filtering
 CREATE OR REPLACE FUNCTION match_document_chunks (
   query_embedding vector(768),
   match_threshold float,
@@ -97,6 +136,7 @@ RETURNS TABLE (
   similarity float
 )
 LANGUAGE plpgsql
+SECURITY DEFINER
 AS $$
 BEGIN
   RETURN QUERY
@@ -114,9 +154,21 @@ BEGIN
     dc.parent_section,
     1 - (dc.embedding <=> query_embedding) AS similarity
   FROM public.document_chunks dc
+  JOIN public.workspaces w ON dc.workspace_id = w.id
   WHERE dc.workspace_id = filter_workspace_id
+    AND (w.user_id = auth.uid() OR auth.uid() IS NULL)
     AND 1 - (dc.embedding <=> query_embedding) > match_threshold
   ORDER BY dc.embedding <=> query_embedding
   LIMIT match_count;
 END;
 $$;
+
+-- Create Storage Bucket 'documents' for PDF files if not already existing
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('documents', 'documents', true)
+ON CONFLICT (id) DO NOTHING;
+
+-- Storage Policies for 'documents' bucket
+DROP POLICY IF EXISTS "Allow public access on documents storage" ON storage.objects;
+CREATE POLICY "Allow public access on documents storage" ON storage.objects
+FOR ALL USING (bucket_id = 'documents') WITH CHECK (bucket_id = 'documents');

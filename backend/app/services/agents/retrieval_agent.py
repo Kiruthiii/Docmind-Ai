@@ -34,12 +34,29 @@ class RetrievalIntelligenceAgent:
         workspace_id: str,
         structured_query: StructuredQuery,
         query_vector: List[float],
-        top_k: int = 15
+        top_k: int = 15,
+        access_token: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Retrieves candidate evidence chunks using hybrid search, structural boost, and section filtering."""
+        """Retrieves candidate evidence chunks using hybrid search, structural boost, and section filtering from Supabase."""
         question = structured_query.original_query
-        client = get_supabase_client()
+        client = get_supabase_client(access_token)
         raw_candidates = []
+
+        # Map document filenames for citation rendering
+        doc_filename_map: Dict[str, str] = {
+            d_id: d_rec.get("filename", "Document")
+            for d_id, d_rec in _in_memory_db.documents.items()
+        }
+
+        if client:
+            try:
+                doc_res = client.table("documents").select("id, filename").eq("workspace_id", workspace_id).execute()
+                if doc_res.data:
+                    for d in doc_res.data:
+                        doc_filename_map[d["id"]] = d["filename"]
+            except Exception as d_err:
+                logger.warning(f"Failed to fetch document names for workspace {workspace_id}: {d_err}")
+
 
         if client:
             try:
@@ -56,47 +73,67 @@ class RetrievalIntelligenceAgent:
                 if response.data:
                     for chunk in response.data:
                         doc_id = chunk.get("document_id")
-                        doc_rec = _in_memory_db.documents.get(doc_id)
-                        if doc_rec:
-                            chunk["filename"] = doc_rec.get("filename", "Document")
+                        chunk["filename"] = doc_filename_map.get(doc_id, _in_memory_db.documents.get(doc_id, {}).get("filename", "Document"))
                     raw_candidates = response.data
             except Exception as e:
-                logger.warning(f"Supabase RPC search failed: {e}. Falling back to in-memory search.")
+                logger.warning(f"Supabase RPC search failed: {e}. Falling back to table search.")
 
         if not raw_candidates:
-            workspace_chunks = [c for c in _in_memory_db.document_chunks if c.get("workspace_id") == workspace_id]
+            workspace_chunks = []
+            if client:
+                try:
+                    res_db = client.table("document_chunks").select("*").eq("workspace_id", workspace_id).execute()
+                    if res_db.data:
+                        workspace_chunks = res_db.data
+                except Exception as ex:
+                    logger.warning(f"Supabase table search failed: {ex}")
+
+            if not workspace_chunks:
+                workspace_chunks = [c for c in _in_memory_db.document_chunks if c.get("workspace_id") == workspace_id]
+
             if not workspace_chunks:
                 return []
+
+            for chunk in workspace_chunks:
+                doc_id = chunk.get("document_id")
+                chunk["filename"] = chunk.get("filename") or doc_filename_map.get(doc_id) or _in_memory_db.documents.get(doc_id, {}).get("filename", "Document")
 
             # Build query term tokens from information_needed and dynamic_query_variations
             var_text = " ".join(structured_query.dynamic_query_variations) if structured_query.dynamic_query_variations else question
             q_terms = [w for w in TOKEN_RE.findall(var_text.lower()) if w not in STOP_WORDS]
-            info_terms = [w.lower() for w in structured_query.information_needed if w.lower() not in STOP_WORDS]
 
             scored_chunks = []
             for chunk in workspace_chunks:
                 chunk_vec = chunk.get("embedding", [])
                 score = cosine_similarity(query_vector, chunk_vec) if chunk_vec else 0.0
 
-                content_lower = chunk.get("content", "").lower()
-                words = set(TOKEN_RE.findall(content_lower))
+                if not chunk_vec or score < 0.15:
+                    content_lower = chunk.get("content", "").lower()
+                    words = set(TOKEN_RE.findall(content_lower))
+                    matches = sum(1 for term in q_terms if term_matches_words(term, words, content_lower))
+                    rescue_score = min(0.6, matches * 0.15)
+                    score = max(score, rescue_score)
 
-                matches = sum(1 for term in q_terms if term_matches_words(term, words, content_lower))
-                info_matches = sum(1 for term in info_terms if term_matches_words(term, words, content_lower))
-
-                score += matches * 0.15 + info_matches * 0.25
-
-                if score >= settings.SIMILARITY_THRESHOLD or matches > 0:
-                    scored_chunk = dict(chunk)
-                    scored_chunk["similarity"] = score
-                    scored_chunks.append(scored_chunk)
+                scored_chunk = dict(chunk)
+                scored_chunk["similarity"] = score
+                scored_chunks.append(scored_chunk)
 
             scored_chunks.sort(key=lambda x: x["similarity"], reverse=True)
             raw_candidates = scored_chunks[:top_k]
 
         # 1. Document Overview Scope Candidate Assembly
         if structured_query.retrieval_scope == "DOCUMENT_LEVEL" or structured_query.intent == "DOCUMENT_OVERVIEW" or structured_query.answer_type == "OVERVIEW":
-            workspace_all = [c for c in _in_memory_db.document_chunks if c.get("workspace_id") == workspace_id]
+            workspace_all = []
+            if client:
+                try:
+                    res_all = client.table("document_chunks").select("*").eq("workspace_id", workspace_id).execute()
+                    if res_all.data:
+                        workspace_all = res_all.data
+                except Exception as ex:
+                    logger.warning(f"Document overview fetch failed: {ex}")
+            if not workspace_all:
+                workspace_all = [c for c in _in_memory_db.document_chunks if c.get("workspace_id") == workspace_id]
+
             if workspace_all:
                 workspace_all.sort(key=lambda x: (x.get("page_number", 1), x.get("id", "")))
                 non_noise = [
@@ -115,7 +152,9 @@ class RetrievalIntelligenceAgent:
                     sec = (c.get("parent_section") or c.get("section_path") or "").lower()
                     page = c.get("page_number", 1)
                     if page <= 2 or "abstract" in sec or "intro" in pos or "intro" in sec or "overview" in sec:
-                        selected.append(c)
+                        c_copy = dict(c)
+                        c_copy["filename"] = doc_filename_map.get(c.get("document_id"), "Document")
+                        selected.append(c_copy)
                         seen_ids.add(c.get("id"))
                     if len(selected) >= 4:
                         break
@@ -139,19 +178,19 @@ class RetrievalIntelligenceAgent:
 
             hybrid_score = sim
 
-            # Boost section match
-            if any(ts in pos or ts in p_sec or ts in s_path for ts in target_sections):
-                hybrid_score += 0.35
+            # Secondary metadata signal: slight boost for section alignment
+            if target_sections and any(ts in pos or ts in p_sec or ts in s_path for ts in target_sections):
+                hybrid_score += 0.10
 
-            # Boost visual tables/figures for visual intent
+            # Secondary metadata signal: visual tables/figures for visual intent
             if structured_query.intent == "VISUAL_ANALYSIS" and (chunk.get("content_type") in ("table", "figure_caption") or chunk.get("chunk_type") in ("table", "figure_caption")):
-                hybrid_score += 0.35
+                hybrid_score += 0.10
 
-            # Filter out reference noise if query asks for intro/overview/results/section
+            # Secondary metadata signal: reduce reference noise unless specifically asked for
             c_type = (chunk.get("content_type") or chunk.get("chunk_type") or "").lower()
             if "reference" in pos or "reference" in p_sec or "bibliography" in p_sec or c_type == "reference":
                 if target_sections and not any("ref" in ts for ts in target_sections):
-                    hybrid_score -= 1.0
+                    hybrid_score -= 0.30
 
             chunk_copy = dict(chunk)
             chunk_copy["hybrid_score"] = hybrid_score
@@ -159,3 +198,4 @@ class RetrievalIntelligenceAgent:
 
         reranked.sort(key=lambda x: x["hybrid_score"], reverse=True)
         return reranked[:top_k]
+
