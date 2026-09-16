@@ -18,8 +18,18 @@ CREATE TABLE IF NOT EXISTS public.documents (
     storage_path TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'ready', 'failed')),
     page_count INTEGER DEFAULT 0,
+    document_category TEXT DEFAULT 'General',
+    document_type TEXT DEFAULT 'General Document',
+    document_type_confidence FLOAT DEFAULT 1.0,
+    classification_method TEXT DEFAULT 'default',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migration for existing tables
+ALTER TABLE public.documents ADD COLUMN IF NOT EXISTS document_category TEXT DEFAULT 'General';
+ALTER TABLE public.documents ADD COLUMN IF NOT EXISTS document_type TEXT DEFAULT 'General Document';
+ALTER TABLE public.documents ADD COLUMN IF NOT EXISTS document_type_confidence FLOAT DEFAULT 1.0;
+ALTER TABLE public.documents ADD COLUMN IF NOT EXISTS classification_method TEXT DEFAULT 'default';
 
 -- Document Chunks table (with pgvector embedding)
 CREATE TABLE IF NOT EXISTS public.document_chunks (

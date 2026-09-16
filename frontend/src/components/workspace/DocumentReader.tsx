@@ -105,18 +105,9 @@ export const DocumentReader: React.FC<DocumentReaderProps> = ({
       setPdfDoc(pdf);
       setDocLoading(false);
     } catch (err: any) {
-      console.warn('PDF Primary load error, trying sample fallback:', err);
-      try {
-        // Fallback to demo sample PDF if custom URL fails
-        const fallbackTask = pdfjsLib.getDocument({ url: '/Vaswani_Attention_2017.pdf' });
-        const pdf = await fallbackTask.promise;
-        setPdfDoc(pdf);
-        setDocLoading(false);
-      } catch (fallbackErr: any) {
-        console.error('PDF fallback load error:', fallbackErr);
-        setDocError(err?.message || 'Failed to load or parse PDF document.');
-        setDocLoading(false);
-      }
+      console.error('Failed to load PDF document:', err);
+      setDocError(err?.message || `Failed to load or parse PDF file for "${document.filename}".`);
+      setDocLoading(false);
     }
   }, [document.id, document.file_url, document.file_data, document.filename]);
 

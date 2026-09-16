@@ -7,7 +7,8 @@ from fastapi import (APIRouter, Depends, File, HTTPException, Response, UploadFi
 
 from app.api.deps import get_current_user
 from app.db.supabase_client import _in_memory_db, get_supabase_client
-from app.schemas.document import DocumentResponse, DocumentUploadResponse
+from app.schemas.document import (DocumentAnalysisResponse, DocumentResponse,
+                                  DocumentUploadResponse)
 from app.services.ingestion_service import IngestionService
 
 logger = logging.getLogger("docmind")
@@ -114,7 +115,60 @@ async def upload_document(
         document_id=result["document_id"],
         filename=result["filename"],
         status=result["status"],
-        message=f"Successfully processed PDF ({result.get('page_count', 0)} pages, {result.get('chunk_count', 0)} searchable chunks)."
+        message=f"Successfully processed PDF ({result.get('page_count', 0)} pages, {result.get('chunk_count', 0)} searchable chunks). Classified as '{result.get('document_type', 'General Document')}'.",
+        document_category=result.get("document_category", "General"),
+        document_type=result.get("document_type", "General Document"),
+        document_type_confidence=float(result.get("document_type_confidence", 1.0)),
+        classification_method=result.get("classification_method", "default"),
+        evidence=result.get("evidence", [])
+    )
+
+@router.get("/documents/{document_id}/analysis", response_model=DocumentAnalysisResponse)
+def get_document_analysis(
+    document_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Returns analysis structure and hierarchical classification details for a document."""
+    token = current_user.get("token")
+    doc_rec = get_document_record(document_id, token)
+    if not doc_rec:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document record for ID {document_id} was not found."
+        )
+
+    workspace_id = doc_rec.get("workspace_id")
+    verify_workspace_ownership(workspace_id, current_user["id"], token)
+
+    client = get_supabase_client(token) if token else None
+    doc_chunks = []
+    if client:
+        try:
+            res = client.table("document_chunks").select("*").eq("document_id", document_id).execute()
+            if res.data:
+                doc_chunks = res.data
+        except Exception as e:
+            logger.warning(f"Error fetching chunks for document analysis: {e}")
+
+    if not doc_chunks:
+        doc_chunks = [c for c in _in_memory_db.document_chunks if c.get("document_id") == document_id]
+
+    doc_agent = ingestion_service.document_agent
+    struct_analysis = doc_agent.analyze_document_structure(doc_chunks)
+
+    return DocumentAnalysisResponse(
+        document_id=document_id,
+        filename=doc_rec.get("filename", "document.pdf"),
+        document_category=doc_rec.get("document_category", "General"),
+        document_type=doc_rec.get("document_type", "General Document"),
+        document_type_confidence=float(doc_rec.get("document_type_confidence", 1.0)),
+        classification_method=doc_rec.get("classification_method", "default"),
+        evidence=doc_rec.get("evidence", []),
+        page_count=doc_rec.get("page_count", struct_analysis.get("page_count", 0)),
+        total_chunks=struct_analysis.get("total_chunks", len(doc_chunks)),
+        detected_sections=struct_analysis.get("detected_sections", []),
+        detected_positions=struct_analysis.get("detected_positions", []),
+        content_types=struct_analysis.get("content_types", [])
     )
 
 @router.get("/documents/{document_id}/file")
