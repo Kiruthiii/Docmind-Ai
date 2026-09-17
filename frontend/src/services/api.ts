@@ -128,6 +128,8 @@ export interface ChatMessageRequest {
   session_id?: string;
   question: string;
   show_sources?: boolean;
+  document_id?: string;
+  document_ids?: string[];
 }
 
 export interface ChatMessageResponse {

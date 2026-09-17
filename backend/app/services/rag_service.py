@@ -24,11 +24,34 @@ from app.services.llm_service import (CLEAN_WORD_RE, NOISE_SECTION_MARKERS,
 
 logger = logging.getLogger("docmind")
 
-def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+def _parse_float_vector(vec: Any) -> List[float]:
+    if not vec:
+        return []
+    if isinstance(vec, str):
+        try:
+            import json
+            vec = json.loads(vec)
+        except Exception:
+            return []
+    if isinstance(vec, (list, tuple)):
+        parsed = []
+        for x in vec:
+            try:
+                parsed.append(float(x))
+            except (ValueError, TypeError):
+                continue
+        return parsed
+    return []
+
+def cosine_similarity(vec1: Any, vec2: Any) -> float:
     """Calculates cosine similarity between two float vectors."""
-    dot = sum(a * b for a, b in zip(vec1, vec2))
-    norm1 = math.sqrt(sum(a * a for a in vec1))
-    norm2 = math.sqrt(sum(b * b for b in vec2))
+    v1 = _parse_float_vector(vec1)
+    v2 = _parse_float_vector(vec2)
+    if not v1 or not v2 or len(v1) != len(v2):
+        return 0.0
+    dot = sum(a * b for a, b in zip(v1, v2))
+    norm1 = math.sqrt(sum(a * a for a in v1))
+    norm2 = math.sqrt(sum(b * b for b in v2))
     if norm1 == 0 or norm2 == 0:
         return 0.0
     return dot / (norm1 * norm2)
@@ -49,11 +72,16 @@ class RAGService:
         question: str,
         session_id: str = None,
         show_sources: bool = True,
-        access_token: Optional[str] = None
+        access_token: Optional[str] = None,
+        document_id: Optional[str] = None,
+        document_ids: Optional[List[str]] = None
     ) -> ChatMessageResponse:
         """Retrieves evidence and generates a grounded response using Multi-Agent Evidence-Sufficiency Pipeline."""
         if not session_id:
             session_id = str(uuid.uuid4())
+
+        if document_id and not document_ids:
+            document_ids = [document_id]
 
         # 1. Agent 1: Query Intelligence
         structured_query = self.query_agent.analyze_query(question)
@@ -65,7 +93,8 @@ class RAGService:
             structured_query=structured_query,
             query_vector=query_vector,
             top_k=settings.MAX_RETRIEVAL_CHUNKS,
-            access_token=access_token
+            access_token=access_token,
+            document_ids=document_ids
         )
 
         # 3. Agent 4: Evidence Assembly
@@ -91,7 +120,8 @@ class RAGService:
                 structured_query=reformulated_query,
                 query_vector=query_vector,
                 top_k=settings.MAX_RETRIEVAL_CHUNKS,
-                access_token=access_token
+                access_token=access_token,
+                document_ids=document_ids
             )
             assembly_result = self.assembly_agent.assemble_evidence_context(retry_candidates)
             validation_result = self.validation_agent.validate_evidence(

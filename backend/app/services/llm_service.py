@@ -2,6 +2,7 @@ import difflib
 import hashlib
 import json
 import logging
+import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -10,6 +11,8 @@ from google.genai import types
 
 from app.core.config import settings
 from app.schemas.chat import Claim, GroundedAnswerSchema, QueryIntent
+from app.schemas.document_types import DocumentClassificationResult, DocumentTypeEnum
+from app.services.heuristic_classifier import classify_by_heuristics
 
 logger = logging.getLogger("docmind")
 
@@ -147,34 +150,138 @@ class LLMService:
             return self._mock_embedding(text)
 
     def get_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
-        """Generates 768-dimensional embeddings for a list of texts using batch processing."""
+        """Generates 768-dimensional embeddings for a list of texts using batch processing in chunks of max 96."""
         if not texts:
             return []
 
-        if self._quota_exceeded or not (self.client and self.api_key):
+        if not (self.client and self.api_key):
             return [self._mock_embedding(t) for t in texts]
 
+        import time
+        batch_size = 96
+        all_embeddings: List[List[float]] = []
+        request_quota_exhausted = False
+        max_retries = 3
+
+        for i in range(0, len(texts), batch_size):
+            sub_texts = texts[i:i + batch_size]
+            if request_quota_exhausted:
+                all_embeddings.extend([self._mock_embedding(t) for t in sub_texts])
+                continue
+
+            if i > 0:
+                time.sleep(0.15)  # Pace batch requests to avoid hitting rate limits on large documents
+
+            batch_success = False
+            for attempt in range(1, max_retries + 1):
+                try:
+                    response = self.client.models.embed_content(
+                        model=settings.EMBEDDING_MODEL,
+                        contents=sub_texts,
+                        config=types.EmbedContentConfig(output_dimensionality=768)
+                    )
+                    if hasattr(response, "embeddings") and response.embeddings:
+                        all_embeddings.extend([e.values for e in response.embeddings])
+                    elif hasattr(response, "embedding") and response.embedding:
+                        all_embeddings.extend([response.embedding.values])
+                    else:
+                        all_embeddings.extend([self._mock_embedding(t) for t in sub_texts])
+                    batch_success = True
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    is_rate_limit = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "Quota" in err_str
+                    if is_rate_limit and attempt < max_retries:
+                        backoff = 2 ** (attempt - 1)
+                        logger.warning(
+                            f"Gemini embedding 429 rate limit hit at batch {i // batch_size + 1}/{math.ceil(len(texts) / batch_size)} "
+                            f"(attempt {attempt}/{max_retries}). Retrying in {backoff}s..."
+                        )
+                        time.sleep(backoff)
+                    else:
+                        if is_rate_limit:
+                            logger.warning(
+                                f"Gemini API rate limit quota exhausted at batch {i // batch_size + 1}/{math.ceil(len(texts) / batch_size)} "
+                                f"after {max_retries} attempts: {e}. Completing remaining batches with deterministic fallback embeddings."
+                            )
+                            request_quota_exhausted = True
+                        else:
+                            logger.error(f"Error generating batch embeddings from Gemini API: {e}")
+                        all_embeddings.extend([self._mock_embedding(t) for t in sub_texts])
+                        batch_success = False
+                        break
+
+        return all_embeddings
+
+    def classify_document_type(self, text_sample: str, filename: str) -> Optional[Dict[str, Any]]:
+        """Performs 2-level hierarchical document classification using Gemini AI."""
+        if not (self.client and self.api_key):
+            logger.info("Gemini client or API key not configured. Skipping LLM classification.")
+            return None
+
+        prompt = (
+            "You are an expert document intelligence engine for an AI PDF platform.\n"
+            "Analyze the provided document text sample, title, section headers, and filename to determine its nature.\n\n"
+            "HIERARCHICAL CLASSIFICATION:\n"
+            "1. document_category (Broad Category): Choose EXACTLY ONE from ['Academic / Research', 'Education', 'Financial', 'Legal', 'Technical', 'Medical', 'Professional', 'Administrative', 'General'].\n"
+            "2. document_type (Specific Document Type): Dynamically infer a concise title-cased specific document type string based on document purpose, writing style, terminology, and structure (e.g., 'Computer Vision Research Paper', 'Course Syllabus', 'API Documentation', 'GST Tax Invoice', 'NVIDIA Jetson Deployment Guide', 'Embedded Systems Project Report', etc.).\n\n"
+            "CRITICAL INSTRUCTIONS:\n"
+            "- DISTINGUISH SUBJECT/TOPIC FROM DOCUMENT TYPE: 'YOLO vehicle detection' is a topic; 'Computer Vision Research Paper' or 'Embedded Systems Technical Report' is the document type.\n"
+            "- EVALUATE WRITING STYLE & STRUCTURE: Infer document nature from research methodology, citations, technical terminology, academic structure, or administrative layout.\n"
+            "- HANDLE UNCERTAINTY: If sample text is short, incomplete, or ambiguous, return an appropriate lower confidence score (e.g. 0.65 - 0.85) reflecting uncertainty.\n"
+            "- Output MUST be valid JSON matching this schema:\n"
+            "{\n"
+            '  "document_category": "<broad category string>",\n'
+            '  "document_type": "<specific title-cased document type>",\n'
+            '  "confidence": <float between 0.0 and 1.0>,\n'
+            '  "reason": "<1-sentence summary explanation>",\n'
+            '  "evidence": ["<evidence 1>", "<evidence 2>", "<evidence 3>"],\n'
+            '  "primary_topics": ["<topic1>", "<topic2>"]\n'
+            "}\n\n"
+            f"FILENAME: {filename}\n"
+            f"<untrusted_document_sample>\n{text_sample[:3500]}\n</untrusted_document_sample>"
+        )
+
         try:
-            response = self.client.models.embed_content(
-                model=settings.EMBEDDING_MODEL,
-                contents=texts,
-                config=types.EmbedContentConfig(output_dimensionality=768)
+            response = self.client.models.generate_content(
+                model=settings.CHAT_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.0,
+                    response_mime_type="application/json"
+                )
             )
-            if hasattr(response, "embeddings") and response.embeddings:
-                return [e.values for e in response.embeddings]
-            elif hasattr(response, "embedding") and response.embedding:
-                return [response.embedding.values]
-            else:
-                return [self._mock_embedding(t) for t in texts]
+            raw_text = (response.text or "").strip()
+            parsed = json.loads(raw_text)
+
+            doc_cat = str(parsed.get("document_category", "General")).strip()
+            doc_type = str(parsed.get("document_type", "General Document")).strip().title()
+            if not doc_type:
+                doc_type = "General Document"
+
+            conf = float(parsed.get("confidence", 0.85))
+            conf = max(0.0, min(1.0, conf))
+
+            evidence_list = parsed.get("evidence", [])
+            if not isinstance(evidence_list, list):
+                evidence_list = [str(evidence_list)]
+
+            return {
+                "document_category": doc_cat,
+                "document_type": doc_type,
+                "confidence": conf,
+                "reason": parsed.get("reason", "Hierarchical classification by Gemini LLM"),
+                "evidence": [str(ev) for ev in evidence_list[:5]],
+                "primary_topics": parsed.get("primary_topics", []),
+                "method": "llm"
+            }
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "Quota" in err_str:
-                if not self._quota_exceeded:
-                    logger.warning("Gemini API batch embedding quota exceeded (429). Enabling fast mock embedding circuit breaker.")
-                    self._quota_exceeded = True
+                logger.warning("Gemini API rate limit hit (429) during document classification.")
             else:
-                logger.error(f"Error generating batch embeddings from Gemini API: {e}")
-            return [self._mock_embedding(t) for t in texts]
+                logger.warning(f"Gemini LLM document classification failed: {e}")
+            return None
 
     def analyze_query_intent(self, question: str) -> QueryIntent:
         """Analyzes user query prior to retrieval to produce structured QueryIntent."""
@@ -250,8 +357,18 @@ class LLMService:
         """Classifies question into DOCUMENT_META, DOCUMENT_OVERVIEW, COMPARISON, ENTITY_LIST, SECTION_QUERY, TABLE_QUERY, VISUAL_QUERY, EXISTENCE_QUERY, DISTRIBUTED_QUERY, or FACT_LOOKUP."""
         q_lower = question.lower().strip()
 
-        # 1. Document Meta queries (Document type, nature, identity, format, author)
-        if re.search(r'\b(?:what|which)\s+(?:type|kind|class|category|nature|form|format)\s+of\s+document\b|\bwhat\s+type\s+of\s+file\b|\bwhat\s+is\s+this\s+document\b|\bwhat\s+document\s+is\s+this\b|\bdocument\s+type\b|\bis\s+this\s+a\s+(?:legal|contract|lease|resume|paper|report|invoice|manual|agreement)\b', q_lower):
+        # 1. Document Meta queries (Document type, nature, identity, format)
+        if (
+            re.search(
+                r'\b(?:what|which)\s+(?:am\s+i\s+(?:looking\s+at|reading|viewing)|type\s+of\s+document|kind\s+of\s+document|type\s+of\s+file|kind\s+of\s+file|category\s+of\s+document|document\s+type)\b'
+                r'|\b(?:what|which)\s+(?:type|kind|class|category|nature|form|format)\s+of\s+(?:document|file|paper|text)\b'
+                r'|\b(?:identify|describe|explain)\s+(?:this\s+)?(?:document|file|paper|pdf)\b'
+                r'|\bdocument\s+type\b'
+                r'|\bis\s+this\s+a\s+(?:academic|research|legal|contract|lease|resume|report|invoice|manual|agreement|syllabus)\s+(?:paper|doc|document|file)?(?:\?|\s*$)'
+                r'|\bwhat\s+(?:document|file)\s+is\s+this\b',
+                q_lower
+            ) or q_lower in ("what am i looking at", "what is this file", "what document is this", "what am i reading", "what file am i looking at")
+        ) and not any(k in q_lower for k in ["about", "summarize", "overview", "problem", "contribution", "findings"]):
             return "DOCUMENT_META"
 
         # 2. Comparison queries
@@ -267,14 +384,14 @@ class LLMService:
         # 4. Document Overview & Comprehensive Queries
         OVERVIEW_MARKERS = [
             "what is this paper about", "what is the paper about", "what is this document about",
-            "summarize the paper", "summarize the document", "summarize this document",
-            "overview of the paper", "overview of the document", "overview of this document",
-            "what problem does it address", "what problem does this paper address", "what problem does it solve",
-            "what are the key contributions", "what is the main topic", "executive summary", "about this paper",
+            "summarize the paper", "summarize the document", "summarize this document", "summarize", "summarize this", "summary",
+            "tell whats in this", "whats in this", "what is in this", "tell me whats in this", "whats in this document", "what is in this document",
+            "overview of the paper", "overview of the document", "overview of this document", "overview",
+            "executive summary", "about this paper", "about this document",
             "what are the key findings", "main findings", "overall conclusions", "main conclusions",
             "summarize introduction", "what does the introduction say", "summarize methodology", "summarize results"
         ]
-        if any(m in q_lower for m in OVERVIEW_MARKERS) or q_lower in ("summarize this document", "summary", "overview", "what is this document") or re.search(r'\bsummarize\s+(?:the\s+)?(?:introduction|methodology|methods|results|conclusion)\b', q_lower) or re.search(r'\bwhat\s+does\s+the\s+(?:introduction|methodology|results|conclusion)\b', q_lower):
+        if any(m in q_lower for m in OVERVIEW_MARKERS) or q_lower in ("summarize", "summarize this", "summary", "overview", "whats in this", "what is in this", "what is this document") or re.search(r'\bsummarize\b', q_lower) or re.search(r'\b(?:whats|what\s+is|what\'s)\s+in\s+this\b', q_lower):
             return "DOCUMENT_OVERVIEW"
 
         # 5. Entity List queries
@@ -312,7 +429,7 @@ class LLMService:
             return {
                 "answer_type": "document_meta",
                 "scope": scope,
-                "format_instruction": "Infer the specific document type (e.g., 'Resume', 'Research Paper', 'Technical Specification', 'User Manual', 'Financial Report', 'Legal Contract') strictly from document structure and content. Output ONLY the document type name/phrase without conversational preamble or system references."
+                "format_instruction": "Identify the document broad category and dynamic document type strictly using the provided DOCUMENT METADATA and document title/content. Explain clearly in natural language what document the user is looking at, summarizing its title, main subject/topic, and key purpose."
             }
 
         if scope == "DOCUMENT_OVERVIEW":
@@ -371,18 +488,43 @@ class LLMService:
             if exact_matching:
                 return exact_matching[:4]
 
+        if scope == "SECTION_QUERY" or any(k in q_lower for k in ["experience", "work experience", "education", "skills", "projects", "project", "contribution", "contributions", "methodology", "results"]):
+            target_kw = [k for k in ["experience", "work", "education", "skills", "skill", "projects", "project", "contribution", "contributions", "methodology", "results"] if k in q_lower]
+            if target_kw:
+                sec_matching = [
+                    c for c in context_chunks
+                    if any(
+                        re.search(rf'\b{re.escape(k.rstrip("s"))}s?\b', (c.get("parent_section") or "").lower()) or
+                        re.search(rf'\b{re.escape(k.rstrip("s"))}s?\b', (c.get("section_path") or "").lower()) or
+                        re.search(rf'\b{re.escape(k.rstrip("s"))}s?\b', (c.get("content") or "").lower())
+                        for k in target_kw
+                    )
+                ]
+                if sec_matching:
+                    header_matching = [
+                        c for c in sec_matching
+                        if any(
+                            re.search(rf'\b{re.escape(k.rstrip("s"))}s?\b', (c.get("parent_section") or "").lower()) or
+                            re.search(rf'\b{re.escape(k.rstrip("s"))}s?\b', (c.get("section_path") or "").lower())
+                            for k in target_kw
+                        )
+                    ]
+                    if header_matching:
+                        return header_matching[:8]
+                    return sec_matching[:8]
+
         if scope in ("DOCUMENT_META", "DOCUMENT_OVERVIEW"):
             non_ref_chunks = [
                 c for c in context_chunks
                 if not any(r in (c.get("parent_section") or "").lower() or r in (c.get("section_path") or "").lower() for r in NOISE_SECTION_MARKERS)
             ]
-            return non_ref_chunks[:8] if non_ref_chunks else context_chunks[:6]
+            return non_ref_chunks[:10] if non_ref_chunks else context_chunks[:8]
 
         if scope in ("TABLE_QUERY", "VISUAL_QUERY"):
             marker = "table" if scope == "TABLE_QUERY" else "fig"
             matching_chunks = [c for c in context_chunks if marker in c.get("content", "").lower() or c.get("chunk_type") == marker]
             if matching_chunks:
-                return matching_chunks[:4]
+                return matching_chunks[:6]
 
         # Rank context chunks by semantic similarity score
         sorted_chunks = sorted(
@@ -391,7 +533,7 @@ class LLMService:
             reverse=True
         )
 
-        max_k = 6 if scope in ("SECTION_QUERY", "DISTRIBUTED_QUERY", "ENTITY_LIST", "COMPARISON") else 4
+        max_k = 10 if scope in ("SECTION_QUERY", "DISTRIBUTED_QUERY", "ENTITY_LIST", "COMPARISON", "DOCUMENT_OVERVIEW") else 8
         return sorted_chunks[:max_k]
 
     def _validate_claims_and_relevance(
@@ -505,7 +647,22 @@ class LLMService:
             content = chunk.get("content", "")
             context_blocks.append(f"[Chunk ID: {c_id} | Document: {doc_name} | Page: {page_num}]\n{content}")
 
-        context_str = "\n\n".join(context_blocks)
+        first_chunk = minimal_chunks[0] if minimal_chunks else {}
+        doc_name = first_chunk.get("filename", "Document")
+        doc_category = first_chunk.get("document_category") or first_chunk.get("metadata", {}).get("document_category", "General")
+        doc_type = first_chunk.get("document_type") or first_chunk.get("metadata", {}).get("document_type", "General Document")
+        doc_confidence = first_chunk.get("document_type_confidence") or first_chunk.get("metadata", {}).get("document_type_confidence", 1.0)
+        classification_method = first_chunk.get("classification_method") or first_chunk.get("metadata", {}).get("classification_method", "default")
+
+        metadata_header = (
+            f"DOCUMENT METADATA:\n"
+            f"- Filename: {doc_name}\n"
+            f"- Broad Category: {doc_category}\n"
+            f"- Classified Document Type: {doc_type} (Confidence: {doc_confidence}, Method: {classification_method})\n\n"
+            f"RETRIEVED DOCUMENT CONTEXT:\n"
+        )
+
+        context_str = metadata_header + "\n\n".join(context_blocks)
 
         system_instruction = (
             "You are DocMind AI, an expert document intelligence assistant capable of deep semantic context understanding.\n"
@@ -789,56 +946,77 @@ class LLMService:
                     return (f"The paper was published on {date_m.group(1)}.", True, [c])
 
         # Targeted Location query
-        if any(k in q_lower for k in ["where was", "location", "collected"]):
+        if any(k in q_lower for k in ["where was", "location", "collected", "city", "country"]):
             for c in context_chunks:
                 text = c.get("content", "")
                 for line in text.split("\n"):
                     l_str = line.strip()
-                    if any(k in l_str.lower() for k in ["collected", "road", "karachi", "pakistan", "location"]):
-                        if not l_str.startswith("Section:"):
+                    if any(k in l_str.lower() for k in ["collected", "road", "karachi", "pakistan", "location", "city", "region", "site"]):
+                        if not l_str.startswith("Section:") and len(l_str) > 10:
                             return (l_str, True, [c])
 
-        # Special fallback handler for DOCUMENT_META queries ("What type of document is this?")
-        if query_scope == "DOCUMENT_META":
-            all_text = " ".join([c.get("content", "") for c in context_chunks])
-            all_text_lower = all_text.lower()
-
-            doc_type = "Document"
-            if any(k in all_text_lower for k in ["lease agreement", "residential lease", "landlord", "tenant", "lessor", "lessee"]):
-                doc_type = "Legal Lease Agreement"
-            elif any(k in all_text_lower for k in ["contract", "agreement", "party of the first part", "indemnify"]):
-                doc_type = "Legal Contract / Agreement"
-            elif any(k in all_text_lower for k in ["abstract", "introduction", "references", "doi:", "ieee", "arxiv"]):
-                doc_type = "Academic / Research Paper"
-            elif any(k in all_text_lower for k in ["resume", "curriculum vitae", "work experience", "education", "skills"]):
-                doc_type = "Resume / Curriculum Vitae"
-            elif any(k in all_text_lower for k in ["invoice", "bill to", "total amount due", "payment terms"]):
-                doc_type = "Invoice / Financial Document"
-            elif any(k in all_text_lower for k in ["specification", "user manual", "system architecture", "api reference"]):
-                doc_type = "Technical Documentation"
-
-            answer = f"Based on the content and structure of the uploaded document, this is an **{doc_type}**."
-            return (answer, True, context_chunks[:2])
-
-        # Special fallback handler for DOCUMENT_OVERVIEW queries ("What is this paper about?")
-        if query_scope == "DOCUMENT_OVERVIEW" or any(k in question.lower() for k in ["summarize paper", "overall overview", "paper summary", "main summary"]):
-            doc_name = context_chunks[0].get("filename", "Document") if context_chunks else "Document"
-            overview_lines = []
-            for chunk in context_chunks[:4]:
-                for line in chunk.get("content", "").split("\n"):
+        # Targeted Diagram & Architecture query
+        if any(k in q_lower for k in ["architecture", "diagram", "network", "pattern", "skip connections"]):
+            for c in context_chunks:
+                text = c.get("content", "")
+                for line in text.split("\n"):
                     l_str = line.strip()
-                    l_lower = l_str.lower()
-                    if l_str and not l_str.startswith("Section:") and not l_str.startswith("###") and not l_str.startswith("FIGURE") and len(l_str) > 20:
-                        if not any(k in l_lower for k in ["creative commons", "licensed under", "all rights reserved", "ieee", "doi:", "volume 13"]):
-                            overview_lines.append(l_str)
-                            if len(overview_lines) >= 5:
+                    if any(k in l_str.lower() for k in ["skip connection", "residual", "architecture", "pattern", "network diagram"]):
+                        if not l_str.startswith("Section:") and len(l_str) > 10:
+                            return (l_str, True, [c])
+
+        # Fallback handler for DOCUMENT_META queries ("What type of document is this?")
+        if query_scope == "DOCUMENT_META":
+            first_c = context_chunks[0] if context_chunks else {}
+            doc_cat = first_c.get("document_category") or first_c.get("metadata", {}).get("document_category", "General")
+            doc_type = first_c.get("document_type") or first_c.get("metadata", {}).get("document_type", "General Document")
+            doc_name = first_c.get("filename", "Document")
+
+            if doc_type == "General Document" or doc_cat == "General":
+                sample_text = "\n".join([c.get("content", "") for c in context_chunks[:3]])
+                heur_res = classify_by_heuristics(sample_text, doc_name)
+                if heur_res.document_type != "General Document":
+                    doc_cat = heur_res.document_category
+                    doc_type = heur_res.document_type
+
+            if doc_cat != "General" and doc_type != "General Document":
+                return (f"The document (**{doc_name}**) is an **{doc_cat}** document (specifically a **{doc_type}**).", True, [first_c])
+            return (f"The document (**{doc_name}**) is identified as a **{doc_type}**.", True, [first_c])
+
+        # Fallback handler for DOCUMENT_OVERVIEW queries ("What is this paper about?", "summarize", "tell whats in this")
+        if query_scope == "DOCUMENT_OVERVIEW":
+            selected_chunks = context_chunks[:10]
+            first_c = selected_chunks[0] if selected_chunks else {}
+            doc_name = first_c.get("filename", "Document")
+            doc_type = first_c.get("document_type") or first_c.get("metadata", {}).get("document_type", "General Document")
+            doc_category = first_c.get("document_category") or first_c.get("metadata", {}).get("document_category", "General")
+
+            paras = []
+            seen_paras = set()
+            for c in selected_chunks:
+                text = (c.get("content") or "").strip()
+                if not text:
+                    continue
+                # Pick substantial paragraphs or non-noise sections
+                for p in text.split("\n\n"):
+                    p_clean = re.sub(r'\s+', ' ', p).strip()
+                    if len(p_clean) > 40 and not p_clean.startswith("Section:") and not p_clean.startswith("###"):
+                        p_low = p_clean.lower()
+                        if p_low not in seen_paras and not any(k in p_low for k in ["creative commons", "doi:", "all rights reserved", "received", "accepted"]):
+                            seen_paras.add(p_low)
+                            paras.append(p_clean)
+                            if len(paras) >= 4:
                                 break
-                if len(overview_lines) >= 5:
+                if len(paras) >= 4:
                     break
 
-            summary_text = "\n".join(overview_lines) if overview_lines else "Provides an overview of the key concepts, methodology, and findings presented in the document."
-            answer = f"Based on evidence in **{doc_name}**:\n\n{summary_text}"
-            return (answer, True, context_chunks[:3])
+            if paras:
+                summary_body = "\n\n".join(paras[:3])
+                return (f"**Summary of {doc_name}** (*{doc_type}*):\n\n{summary_body}", True, selected_chunks[:4])
+            elif selected_chunks:
+                text = selected_chunks[0].get("content", "").strip()
+                return (f"**Summary of {doc_name}** (*{doc_type}*):\n\n{text[:500]}...", True, [selected_chunks[0]])
+            return (refusal_phrase, False, [])
 
         target_ent = extract_target_numbered_entity(question)
         if target_ent:
@@ -910,22 +1088,29 @@ class LLMService:
             if is_relevant:
                 relevant_chunks.append(chunk)
 
-        GENERIC_QUERY_TERMS = {"system", "model", "paper", "method", "approach", "data", "text", "document", "use", "used", "using", "work", "deploying", "deployed", "make", "made", "study", "this", "that", "it", "role", "roles", "internship", "internships", "experience", "detail", "details", "information", "about", "tell"}
+        GENERIC_QUERY_TERMS = {"system", "model", "paper", "method", "approach", "data", "text", "document", "use", "used", "using", "work", "deploying", "deployed", "make", "made", "study", "this", "that", "it", "role", "roles", "internship", "internships", "experience", "detail", "details", "information", "about", "tell", "was", "were", "company", "corp", "inc"}
         specific_q_terms = [t for t in q_terms if t.lower() not in GENERIC_QUERY_TERMS]
+        
+        # Expand specific query terms using keyword expansions
+        expanded_specific_terms = list(specific_q_terms)
+        for st in specific_q_terms:
+            if st.lower() in SECTION_KEYWORD_EXPANSIONS:
+                expanded_specific_terms.extend(SECTION_KEYWORD_EXPANSIONS[st.lower()])
 
-        if specific_q_terms:
+        if expanded_specific_terms:
             matching_chunks_for_specific = [
                 c for c in context_chunks
-                if any(matches_text(st, c.get("content", "").lower()) or matches_text(st, (c.get("parent_section") or "").lower()) or matches_text(st, (c.get("section_path") or "").lower()) for st in specific_q_terms)
+                if any(matches_text(st, c.get("content", "").lower()) or matches_text(st, (c.get("parent_section") or "").lower()) or matches_text(st, (c.get("section_path") or "").lower()) for st in expanded_specific_terms)
             ]
-            if not matching_chunks_for_specific:
+            if matching_chunks_for_specific:
+                relevant_chunks = matching_chunks_for_specific
+            elif query_scope in ("FACT_LOOKUP", "NARROW_FACTUAL"):
                 return (refusal_phrase, False, [])
-            relevant_chunks = matching_chunks_for_specific
+            elif not relevant_chunks:
+                relevant_chunks = context_chunks[:4]
 
         if not relevant_chunks:
-            if q_terms:
-                return (refusal_phrase, False, [])
-            relevant_chunks = context_chunks[:2]
+            return (refusal_phrase, False, [])
 
         matched_blocks = []
         used_chunks = []
@@ -956,9 +1141,9 @@ class LLMService:
 
         GENERIC_ATTR_WORDS = {
             "what", "is", "are", "the", "a", "an", "of", "in", "for", "to", "with", "on", "at", "from", "by", "my", "your",
-            "show", "me", "can", "you", "tell", "give", "list", "does", "do", "did", "how", "why", "which",
-            "duration", "time", "period", "length", "date", "when", "where", "who", "cost", "price", "value", "score", "gpa", "cgpa",
-            "internship", "internships", "experience", "education", "project", "projects", "job", "role", "work", "training", "details"
+            "show", "me", "can", "you", "tell", "give", "list", "does", "do", "did", "how", "why", "which", "was", "were", "company", "corp", "inc",
+            "duration", "time", "period", "length", "date", "when", "where", "who", "cost", "price", "value", "score", "gpa", "cgpa", "details",
+            "internship", "internships", "experience", "education", "project", "projects", "job", "role", "roles", "work", "training"
         }
         fallback_entity_terms = [t for t in q_terms if t.lower() not in GENERIC_ATTR_WORDS and len(t) >= 3]
 
@@ -972,6 +1157,8 @@ class LLMService:
                     c for c in relevant_chunks
                     if any(term_matches_words(et, set(TOKEN_RE.findall(c.get("content", "").lower())), c.get("content", "")) for et in fallback_entity_terms)
                 ]
+            else:
+                return (refusal_phrase, False, [])
 
         for chunk in relevant_chunks:
             doc = chunk.get("filename", "Document")

@@ -63,13 +63,29 @@ WITH CHECK (session_id IN (
 """
 
 def main():
-    print("Checking Supabase connection and tables...")
+    print("=====================================================")
+    print("DocMind AI — Supabase RLS Policy & Connection Check")
+    print("=====================================================")
     client = get_supabase_client()
     if not client:
-        print("Error: Could not create Supabase client.")
+        print("❌ Error: Could not initialize Supabase client. Check SUPABASE_URL and SUPABASE_KEY.")
         sys.exit(1)
 
-    print("Supabase client active for URL:", settings.SUPABASE_URL)
+    print("✅ Supabase client active for URL:", settings.SUPABASE_URL)
+    
+    # Test table visibility
+    tables = ["workspaces", "documents", "document_chunks", "chat_sessions", "messages"]
+    for table in tables:
+        try:
+            res = client.table(table).select("id").limit(1).execute()
+            print(f"  • Table '{table}': OK")
+        except Exception as e:
+            print(f"  • Table '{table}': {e}")
+
+    print("\n--- Required SQL Policies for Supabase SQL Editor ---")
+    print(SQL_POLICIES)
+    print("=====================================================")
 
 if __name__ == "__main__":
     main()
+

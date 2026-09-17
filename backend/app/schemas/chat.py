@@ -32,6 +32,8 @@ class ChatMessageRequest(BaseModel):
     session_id: Optional[str] = None
     question: str = Field(..., json_schema_extra={"example": "What methodology was used in Paper A?"})
     show_sources: bool = Field(default=True)
+    document_id: Optional[str] = None
+    document_ids: Optional[List[str]] = None
 
 class ChatMessageResponse(BaseModel):
     session_id: str

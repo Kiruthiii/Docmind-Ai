@@ -125,10 +125,11 @@ class EvidenceValidationAgent:
                         confidence=0.0
                     )
 
-        # 2. Section Filtering: Prefer requested section chunks when available while keeping general chunks
+        # 2. Section Filtering: Prioritize requested section chunks while retaining other candidate evidence
         target_sections = [s.lower() for s in structured_query.preferred_sections]
         if target_sections and not any(k in q_low for k in ["title", "author", "authors", "published", "publication date"]):
             matched_sec_chunks = []
+            other_chunks = []
             for c in assembled_chunks:
                 pos = (c.get("document_position") or "").lower()
                 sec = (c.get("parent_section") or c.get("section_path") or "").lower()
@@ -138,8 +139,10 @@ class EvidenceValidationAgent:
                         continue
                 if any(ts in pos or ts in sec or ts in c.get("content", "").lower() for ts in target_sections):
                     matched_sec_chunks.append(c)
+                else:
+                    other_chunks.append(c)
             if matched_sec_chunks:
-                assembled_chunks = matched_sec_chunks
+                assembled_chunks = matched_sec_chunks + [c for c in other_chunks if c not in matched_sec_chunks]
 
         # 3. Special Title / Metadata / Header queries
         if any(k in q_low for k in ["title", "author", "authors", "published", "publication date", "who wrote", "who authored"]):

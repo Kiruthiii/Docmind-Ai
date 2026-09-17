@@ -56,7 +56,9 @@ def send_chat_message(
         question=payload.question,
         session_id=payload.session_id,
         show_sources=payload.show_sources,
-        access_token=token
+        access_token=token,
+        document_id=payload.document_id,
+        document_ids=payload.document_ids
     )
 
     return response

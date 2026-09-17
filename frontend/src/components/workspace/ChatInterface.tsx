@@ -74,6 +74,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         session_id: sessionId,
         question: text,
         show_sources: true,
+        document_id: document?.id,
       });
 
       if (response.session_id) {
