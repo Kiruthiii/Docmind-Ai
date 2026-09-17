@@ -65,14 +65,14 @@ class QueryIntelligenceAgent:
             strategy = "HYBRID_SECTION"
             preferred_sections = ["Code", "Functions", "Implementation", "Syntax", "Overview", "Methodology"]
 
-        # B. Calculation queries
-        elif re.search(r'\b(?:how\s+is|calculate|calculated|computation|formula|equation)\b', q_lower) and any(k in q_lower for k in ["calculated", "computed", "determine", "determined", "formula", "equation", "metric"]):
+        # B. Calculation & Formula queries
+        elif re.search(r'\b(?:how\s+is|calculate|calculated|computation|formula|equation|metric)\b', q_lower) and any(k in q_lower for k in ["calculated", "computed", "determine", "determined", "formula", "equation", "metric", "rate"]):
             intent = "TECHNICAL_EXPLANATION"
             answer_type = "CALCULATION"
             scope = "LOCAL"
             requirement = "SINGLE_OR_FEW_CHUNKS"
             strategy = "TARGETED"
-            preferred_sections = ["Methodology", "Proposed Approach", "Traffic Density", "Calculation"]
+            preferred_sections = ["Methodology", "Proposed Approach", "Traffic Density", "Calculation", "Evaluation"]
 
         # C. Contribution queries
         elif re.search(r'\b(?:main|key|our|primary)?\s*contributions?\b|\bwhat\s+does\s+(?:this\s+)?(?:paper|work|study)\s+contribute\b', q_lower):
@@ -81,7 +81,7 @@ class QueryIntelligenceAgent:
             scope = "MULTI_CHUNK"
             requirement = "MULTI_SECTION"
             strategy = "HYBRID_SECTION"
-            preferred_sections = ["Introduction", "Abstract"]
+            preferred_sections = ["Introduction", "Abstract", "Contributions", "Results", "Conclusion", "Proposed Approach"]
 
         # D. Problem Statement queries
         elif re.search(r'\b(?:main\s+problem|problem\s+addressed|research\s+problem|motivation|challenges\s+in|what\s+problem\s+does)\b', q_lower):
@@ -90,9 +90,27 @@ class QueryIntelligenceAgent:
             scope = "MULTI_CHUNK"
             requirement = "MULTI_SECTION"
             strategy = "HYBRID_SECTION"
-            preferred_sections = ["Introduction", "Abstract", "Background"]
+            preferred_sections = ["Introduction", "Abstract", "Background", "Motivation"]
 
-        # E. Document Overview & Document Type / Identity queries
+        # E. Location / Dataset Origin Queries
+        elif re.search(r'\b(?:where\s+was|where\s+is|location|collected|city|country|region|site)\b', q_lower) and any(k in q_lower for k in ["dataset", "collected", "data", "where", "location"]):
+            intent = "FACT_LOOKUP"
+            answer_type = "FACT"
+            scope = "LOCAL"
+            requirement = "SINGLE_OR_FEW_CHUNKS"
+            strategy = "TARGETED"
+            preferred_sections = ["Methodology", "Datasets", "Experimental Setup", "Introduction", "Data Collection"]
+
+        # F. Network Diagram & Architecture Pattern Queries
+        elif re.search(r'\b(?:architecture|pattern|network\s+diagram|skip\s+connections?|diagram)\b', q_lower):
+            intent = "TECHNICAL_EXPLANATION"
+            answer_type = "FACT"
+            scope = "LOCAL"
+            requirement = "SINGLE_OR_FEW_CHUNKS"
+            strategy = "TARGETED"
+            preferred_sections = ["Architecture", "Methodology", "Proposed Approach", "Network", "Diagram"]
+
+        # G. Document Overview & Document Type / Identity queries
         elif (
             re.search(
                 r'\b(?:summarize|summary|overview|abstract|executive\s+summary)\b'
@@ -124,7 +142,7 @@ class QueryIntelligenceAgent:
             elif "conclusion" in q_lower:
                 preferred_sections = ["Conclusion"]
 
-        # F. Resume & Document Section queries (Work Experience, Education, Skills)
+        # H. Resume & Document Section queries (Work Experience, Education, Skills)
         elif any(k in q_lower for k in ["work experience", "experience", "education", "projects", "project", "certificates", "qualifications", "skills"]):
             intent = "SECTION_QUERY"
             answer_type = "LIST"
@@ -140,7 +158,7 @@ class QueryIntelligenceAgent:
             elif "project" in q_lower:
                 preferred_sections = ["Projects"]
 
-        # G. Author & Contributor Queries
+        # I. Author & Contributor Queries
         elif re.search(r'\b(?:who\s+(?:are|is)\s+(?:the\s+)?authors?|who\s+(?:wrote|authored|created)|authors?\s+of|written\s+by|contributors?|list\s+(?:the\s+)?authors)\b', q_lower):
             intent = "DOCUMENT_OVERVIEW"
             answer_type = "LIST"
@@ -149,7 +167,7 @@ class QueryIntelligenceAgent:
             strategy = "OVERVIEW"
             preferred_sections = ["Header", "Title", "Introduction", "Abstract"]
 
-        # H. Document Title, Date, & Metadata Queries
+        # J. Document Title, Date, & Metadata Queries
         elif re.search(r'\b(?:what\s+is\s+the\s+title|paper\s+called|title\s+of\s+the\s+paper|paper\s+title|published|publication\s+date|doi)\b', q_lower):
             intent = "DOCUMENT_OVERVIEW"
             answer_type = "DATE" if "published" in q_lower or "date" in q_lower else "FACT"
@@ -158,7 +176,7 @@ class QueryIntelligenceAgent:
             strategy = "OVERVIEW"
             preferred_sections = ["Header", "Title", "Introduction"]
 
-        # I. Methodology queries
+        # K. Methodology queries
         elif any(k in q_lower for k in ["methodology", "methods", "proposed approach", "how does the", "algorithm work", "pipeline"]):
             intent = "METHODOLOGY"
             answer_type = "METHODOLOGY"
@@ -167,7 +185,7 @@ class QueryIntelligenceAgent:
             strategy = "HYBRID_SECTION"
             preferred_sections = ["Methodology", "Proposed Approach", "System Model"]
 
-        # J. Results queries
+        # L. Results queries
         elif any(k in q_lower for k in ["results", "evaluation", "performance", "findings", "accuracy"]):
             intent = "RESULTS"
             answer_type = "RESULT"
@@ -179,6 +197,12 @@ class QueryIntelligenceAgent:
         # 2. Extract information needed & key terms
         words = TOKEN_RE.findall(question)
         info_needed = [w for w in words if w.lower() not in STOP_WORDS and len(w) >= 2]
+
+        # Preserve question context terms like 'where', 'how' if info_needed is sparse
+        if len(info_needed) <= 2:
+            for w in words:
+                if w.lower() in ("where", "how", "why", "who", "when") and w.lower() not in info_needed:
+                    info_needed.append(w.lower())
 
         # Extract multi-word phrases (proper nouns, camelCase, snake_case)
         phrases = re.findall(r'\b[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+\b|\b[A-Z][a-z]+(?:[A-Z][a-z]+)+\b', question)
@@ -192,12 +216,15 @@ class QueryIntelligenceAgent:
         if answer_type == "CALCULATION":
             variations.append(f"{base_keywords} formula equation variables calculation procedure")
         elif answer_type == "CONTRIBUTIONS":
-            variations.append(f"{base_keywords} key contributions main contributions we contribute")
+            variations.append(f"{base_keywords} key contributions main contributions results proposed approach latency accuracy")
         elif answer_type == "PROBLEM_STATEMENT":
             variations.append(f"{base_keywords} problem addressed research motivation challenges")
         elif answer_type == "OVERVIEW":
             variations.append(f"{base_keywords} research topic abstract introduction overall purpose document type")
         elif intent == "TECHNICAL_EXPLANATION":
+            variations.append(f"{base_keywords} code implementation definition specification function example skip connections architecture")
+        elif "where" in q_lower or "location" in q_lower or "collected" in q_lower:
+            variations.append(f"{base_keywords} location city region country site collected gathered dataset")
             variations.append(f"{base_keywords} code implementation definition specification function example")
 
         return StructuredQuery(

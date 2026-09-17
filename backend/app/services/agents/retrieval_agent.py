@@ -166,15 +166,36 @@ class RetrievalIntelligenceAgent:
             workspace_chunks = []
             if client:
                 try:
+                    # 1. Targeted Keyword Search in Supabase for large documents
+                    search_keywords = [w for w in structured_query.information_needed if len(w) >= 3 and w.lower() not in STOP_WORDS]
+                    if search_keywords:
+                        try:
+                            kw_conditions = [f"content.ilike.%{kw}%" for kw in search_keywords[:4]]
+                            kw_query = client.table("document_chunks").select("*").eq("workspace_id", workspace_id).or_(",".join(kw_conditions))
+                            if document_ids:
+                                if len(document_ids) == 1:
+                                    kw_query = kw_query.eq("document_id", document_ids[0])
+                                else:
+                                    kw_query = kw_query.in_("document_id", document_ids)
+                            kw_res = kw_query.limit(100).execute()
+                            if kw_res.data:
+                                workspace_chunks.extend(kw_res.data)
+                        except Exception as kw_err:
+                            logger.warning(f"Targeted keyword query in Supabase failed: {kw_err}")
+
+                    # 2. General workspace chunk select
                     query = client.table("document_chunks").select("*").eq("workspace_id", workspace_id)
                     if document_ids:
                         if len(document_ids) == 1:
                             query = query.eq("document_id", document_ids[0])
                         else:
                             query = query.in_("document_id", document_ids)
-                    res_db = query.execute()
+                    res_db = query.limit(1000).execute()
                     if res_db.data:
-                        workspace_chunks = res_db.data
+                        existing_ids = {c["id"] for c in workspace_chunks if "id" in c}
+                        for c in res_db.data:
+                            if c.get("id") not in existing_ids:
+                                workspace_chunks.append(c)
                 except Exception as ex:
                     logger.warning(f"Supabase table search failed: {ex}")
 
@@ -224,19 +245,22 @@ class RetrievalIntelligenceAgent:
 
             # Build query term tokens from information_needed and dynamic_query_variations
             var_text = " ".join(structured_query.dynamic_query_variations) if structured_query.dynamic_query_variations else question
-            q_terms = [w for w in TOKEN_RE.findall(var_text.lower()) if w not in STOP_WORDS]
+            q_terms = [w for w in TOKEN_RE.findall(var_text.lower()) if w not in STOP_WORDS or w in ("where", "how", "why", "who", "when", "which")]
+            info_terms = [w.lower() for w in structured_query.information_needed if len(w) >= 2]
+            all_target_terms = list(set(q_terms + info_terms))
 
             scored_chunks = []
             for chunk in workspace_chunks:
                 chunk_vec = chunk.get("embedding", [])
                 score = cosine_similarity(query_vector, chunk_vec) if chunk_vec else 0.0
 
-                if not chunk_vec or score < 0.15:
-                    content_lower = chunk.get("content", "").lower()
-                    words = set(TOKEN_RE.findall(content_lower))
-                    matches = sum(1 for term in q_terms if term_matches_words(term, words, content_lower))
-                    rescue_score = min(0.6, matches * 0.15)
-                    score = max(score, rescue_score)
+                content_lower = chunk.get("content", "").lower()
+                words = set(TOKEN_RE.findall(content_lower))
+                matched_count = sum(1 for term in all_target_terms if term_matches_words(term, words, content_lower))
+                term_ratio = matched_count / max(1, len(all_target_terms))
+                rescue_score = min(0.70, (term_ratio * 0.45) + (matched_count * 0.05))
+
+                score = max(score, rescue_score)
 
                 scored_chunk = dict(chunk)
                 scored_chunk["similarity"] = score
@@ -318,7 +342,11 @@ class RetrievalIntelligenceAgent:
         reranked = []
         target_sections = [s.lower() for s in structured_query.preferred_sections]
         var_text = " ".join(structured_query.dynamic_query_variations) if structured_query.dynamic_query_variations else question
-        q_terms = [w for w in TOKEN_RE.findall(var_text.lower()) if w not in STOP_WORDS]
+        
+        # Include key query words and preserve interrogatives/context terms
+        q_terms = [w for w in TOKEN_RE.findall(var_text.lower()) if w not in STOP_WORDS or w in ("where", "how", "why", "who", "when", "which")]
+        info_terms = [w.lower() for w in structured_query.information_needed if len(w) >= 2]
+        all_target_terms = list(set(q_terms + info_terms))
 
         for chunk in raw_candidates:
             sim = chunk.get("similarity", 0.5)
@@ -329,14 +357,27 @@ class RetrievalIntelligenceAgent:
             p_sec = (chunk.get("parent_section") or chunk.get("metadata", {}).get("parent_section") or "").lower()
             s_path = (chunk.get("section_path") or chunk.get("metadata", {}).get("section_path") or "").lower()
 
-            # Lexical BM25 term overlap calculation
-            matches = sum(1 for term in q_terms if term_matches_words(term, words, content_lower)) if q_terms else 0
-            term_score = min(0.35, matches * 0.08)
+            # Unique term match ratio calculation
+            matched_unique = sum(1 for term in all_target_terms if term_matches_words(term, words, content_lower))
+            total_target = max(1, len(all_target_terms))
+            coverage_ratio = matched_unique / total_target
+
+            # Raw matches bonus
+            matches_count = sum(1 for term in q_terms if term_matches_words(term, words, content_lower)) if q_terms else 0
+            term_score = (coverage_ratio * 0.35) + min(0.15, matches_count * 0.03)
 
             # Exact phrase match bonus
-            exact_phrase_bonus = 0.15 if question.lower() in content_lower and len(question.strip()) > 5 else 0.0
+            exact_phrase_bonus = 0.20 if question.lower() in content_lower and len(question.strip()) > 5 else 0.0
 
-            hybrid_score = (sim * 0.55) + (term_score * 0.30) + exact_phrase_bonus
+            # Information needed keyphrase match bonus
+            info_match_bonus = 0.10 if any(it in content_lower for it in info_terms if len(it) > 3) else 0.0
+
+            hybrid_score = (sim * 0.45) + (term_score * 0.35) + exact_phrase_bonus + info_match_bonus
+
+            # Location action boost: boost chunks containing location phrases when query asks for location/where/collected
+            if any(lk in var_text.lower() for lk in ["where", "location", "collected", "city", "country", "site"]):
+                if any(lc in content_lower for lc in ["collected at", "collected in", "located at", "located in", "karachi", "pakistan", "city of", "road", "gathering site"]):
+                    hybrid_score += 0.35
 
             # Secondary metadata signal: boost for section alignment
             if target_sections and any(ts in pos or ts in p_sec or ts in s_path for ts in target_sections):

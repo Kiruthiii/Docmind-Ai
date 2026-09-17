@@ -64,6 +64,13 @@ export const WorkspaceMain: React.FC<WorkspaceMainProps> = ({
 
   const activeDocument = documents.find((d) => d.id === activeDocumentId) || documents[0] || null;
 
+  // Reset page and highlights when selected active document changes
+  React.useEffect(() => {
+    setCurrentPage(1);
+    setActiveCitationId(null);
+    setHighlightedPageNumber(null);
+  }, [activeDocumentId]);
+
   // Extract all citations from chat history
   const allCitations: Citation[] = chatMessages.reduce((acc: Citation[], msg) => {
     if (msg.citations) {

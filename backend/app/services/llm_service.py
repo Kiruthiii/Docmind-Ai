@@ -488,8 +488,8 @@ class LLMService:
             if exact_matching:
                 return exact_matching[:4]
 
-        if scope == "SECTION_QUERY" or any(k in q_lower for k in ["experience", "work experience", "education", "skills", "projects", "project", "contribution", "contributions", "methodology", "results", "dataset"]):
-            target_kw = [k for k in ["experience", "work", "education", "skills", "skill", "projects", "project", "contribution", "contributions", "methodology", "results", "dataset"] if k in q_lower]
+        if scope == "SECTION_QUERY" or any(k in q_lower for k in ["experience", "work experience", "education", "skills", "projects", "project", "contribution", "contributions", "methodology", "results"]):
+            target_kw = [k for k in ["experience", "work", "education", "skills", "skill", "projects", "project", "contribution", "contributions", "methodology", "results"] if k in q_lower]
             if target_kw:
                 sec_matching = [
                     c for c in context_chunks
@@ -510,21 +510,21 @@ class LLMService:
                         )
                     ]
                     if header_matching:
-                        return header_matching[:4]
-                    return sec_matching[:4]
+                        return header_matching[:8]
+                    return sec_matching[:8]
 
         if scope in ("DOCUMENT_META", "DOCUMENT_OVERVIEW"):
             non_ref_chunks = [
                 c for c in context_chunks
                 if not any(r in (c.get("parent_section") or "").lower() or r in (c.get("section_path") or "").lower() for r in NOISE_SECTION_MARKERS)
             ]
-            return non_ref_chunks[:8] if non_ref_chunks else context_chunks[:6]
+            return non_ref_chunks[:10] if non_ref_chunks else context_chunks[:8]
 
         if scope in ("TABLE_QUERY", "VISUAL_QUERY"):
             marker = "table" if scope == "TABLE_QUERY" else "fig"
             matching_chunks = [c for c in context_chunks if marker in c.get("content", "").lower() or c.get("chunk_type") == marker]
             if matching_chunks:
-                return matching_chunks[:4]
+                return matching_chunks[:6]
 
         # Rank context chunks by semantic similarity score
         sorted_chunks = sorted(
@@ -533,7 +533,7 @@ class LLMService:
             reverse=True
         )
 
-        max_k = 6 if scope in ("SECTION_QUERY", "DISTRIBUTED_QUERY", "ENTITY_LIST", "COMPARISON") else 4
+        max_k = 10 if scope in ("SECTION_QUERY", "DISTRIBUTED_QUERY", "ENTITY_LIST", "COMPARISON", "DOCUMENT_OVERVIEW") else 8
         return sorted_chunks[:max_k]
 
     def _validate_claims_and_relevance(
@@ -946,13 +946,23 @@ class LLMService:
                     return (f"The paper was published on {date_m.group(1)}.", True, [c])
 
         # Targeted Location query
-        if any(k in q_lower for k in ["where was", "location", "collected"]):
+        if any(k in q_lower for k in ["where was", "location", "collected", "city", "country"]):
             for c in context_chunks:
                 text = c.get("content", "")
                 for line in text.split("\n"):
                     l_str = line.strip()
-                    if any(k in l_str.lower() for k in ["collected", "road", "karachi", "pakistan", "location"]):
-                        if not l_str.startswith("Section:"):
+                    if any(k in l_str.lower() for k in ["collected", "road", "karachi", "pakistan", "location", "city", "region", "site"]):
+                        if not l_str.startswith("Section:") and len(l_str) > 10:
+                            return (l_str, True, [c])
+
+        # Targeted Diagram & Architecture query
+        if any(k in q_lower for k in ["architecture", "diagram", "network", "pattern", "skip connections"]):
+            for c in context_chunks:
+                text = c.get("content", "")
+                for line in text.split("\n"):
+                    l_str = line.strip()
+                    if any(k in l_str.lower() for k in ["skip connection", "residual", "architecture", "pattern", "network diagram"]):
+                        if not l_str.startswith("Section:") and len(l_str) > 10:
                             return (l_str, True, [c])
 
         # Fallback handler for DOCUMENT_META queries ("What type of document is this?")
@@ -1078,22 +1088,29 @@ class LLMService:
             if is_relevant:
                 relevant_chunks.append(chunk)
 
-        GENERIC_QUERY_TERMS = {"system", "model", "paper", "method", "approach", "data", "text", "document", "use", "used", "using", "work", "deploying", "deployed", "make", "made", "study", "this", "that", "it", "role", "roles", "internship", "internships", "experience", "detail", "details", "information", "about", "tell"}
+        GENERIC_QUERY_TERMS = {"system", "model", "paper", "method", "approach", "data", "text", "document", "use", "used", "using", "work", "deploying", "deployed", "make", "made", "study", "this", "that", "it", "role", "roles", "internship", "internships", "experience", "detail", "details", "information", "about", "tell", "was", "were", "company", "corp", "inc"}
         specific_q_terms = [t for t in q_terms if t.lower() not in GENERIC_QUERY_TERMS]
+        
+        # Expand specific query terms using keyword expansions
+        expanded_specific_terms = list(specific_q_terms)
+        for st in specific_q_terms:
+            if st.lower() in SECTION_KEYWORD_EXPANSIONS:
+                expanded_specific_terms.extend(SECTION_KEYWORD_EXPANSIONS[st.lower()])
 
-        if specific_q_terms:
+        if expanded_specific_terms:
             matching_chunks_for_specific = [
                 c for c in context_chunks
-                if any(matches_text(st, c.get("content", "").lower()) or matches_text(st, (c.get("parent_section") or "").lower()) or matches_text(st, (c.get("section_path") or "").lower()) for st in specific_q_terms)
+                if any(matches_text(st, c.get("content", "").lower()) or matches_text(st, (c.get("parent_section") or "").lower()) or matches_text(st, (c.get("section_path") or "").lower()) for st in expanded_specific_terms)
             ]
-            if not matching_chunks_for_specific:
+            if matching_chunks_for_specific:
+                relevant_chunks = matching_chunks_for_specific
+            elif query_scope in ("FACT_LOOKUP", "NARROW_FACTUAL"):
                 return (refusal_phrase, False, [])
-            relevant_chunks = matching_chunks_for_specific
+            elif not relevant_chunks:
+                relevant_chunks = context_chunks[:4]
 
         if not relevant_chunks:
-            if q_terms:
-                return (refusal_phrase, False, [])
-            relevant_chunks = context_chunks[:2]
+            return (refusal_phrase, False, [])
 
         matched_blocks = []
         used_chunks = []
@@ -1124,9 +1141,9 @@ class LLMService:
 
         GENERIC_ATTR_WORDS = {
             "what", "is", "are", "the", "a", "an", "of", "in", "for", "to", "with", "on", "at", "from", "by", "my", "your",
-            "show", "me", "can", "you", "tell", "give", "list", "does", "do", "did", "how", "why", "which",
-            "duration", "time", "period", "length", "date", "when", "where", "who", "cost", "price", "value", "score", "gpa", "cgpa",
-            "internship", "internships", "experience", "education", "project", "projects", "job", "role", "work", "training", "details"
+            "show", "me", "can", "you", "tell", "give", "list", "does", "do", "did", "how", "why", "which", "was", "were", "company", "corp", "inc",
+            "duration", "time", "period", "length", "date", "when", "where", "who", "cost", "price", "value", "score", "gpa", "cgpa", "details",
+            "internship", "internships", "experience", "education", "project", "projects", "job", "role", "roles", "work", "training"
         }
         fallback_entity_terms = [t for t in q_terms if t.lower() not in GENERIC_ATTR_WORDS and len(t) >= 3]
 
@@ -1140,6 +1157,8 @@ class LLMService:
                     c for c in relevant_chunks
                     if any(term_matches_words(et, set(TOKEN_RE.findall(c.get("content", "").lower())), c.get("content", "")) for et in fallback_entity_terms)
                 ]
+            else:
+                return (refusal_phrase, False, [])
 
         for chunk in relevant_chunks:
             doc = chunk.get("filename", "Document")
