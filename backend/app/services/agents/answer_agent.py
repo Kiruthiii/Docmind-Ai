@@ -76,22 +76,4 @@ class AnswerIntelligenceAgent:
         cleaned = re.sub(r"\s*\(\'###[^\']+\'\)", "", cleaned)
         cleaned = re.sub(r"\s*\(\'Section:[^\']+\'\)", "", cleaned)
 
-        q_lower = question.lower()
-
-        # Exact Answer Selection for Title queries
-        if any(k in q_lower for k in ["title", "paper called", "name of this paper"]):
-            lines = [l.strip() for l in cleaned.split("\n") if l.strip()]
-            for l in lines:
-                l_low = l.lower()
-                if not any(k in l_low for k in ["structured as follows", "infineon", "grant", "approved", "volume", "journal"]):
-                    if len(l) > 15:
-                        cleaned = l
-                        break
-
-        # Exact Answer Selection for Publication Date queries
-        elif any(k in q_lower for k in ["published", "publication date", "when was"]):
-            date_m = re.search(r'\b(\d{1,2}\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}|\d{4})\b', cleaned, re.IGNORECASE)
-            if date_m and not any(k in cleaned.lower() for k in ["supported by", "grant", "university"]):
-                cleaned = f"The paper was published on {date_m.group(1)}."
-
         return cleaned

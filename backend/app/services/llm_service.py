@@ -36,12 +36,25 @@ ATTRIBUTE_EXPANSIONS = {
 CLEAN_WORD_RE = re.compile(r'[^a-zA-Z0-9]')
 TOKEN_RE = re.compile(r'\b[a-zA-Z0-9]+\b')
 
+ROMAN_ARABIC_MAP = {
+    "1": ["1", "i"], "i": ["1", "i"],
+    "2": ["2", "ii"], "ii": ["2", "ii"],
+    "3": ["3", "iii"], "iii": ["3", "iii"],
+    "4": ["4", "iv"], "iv": ["4", "iv"],
+    "5": ["5", "v"], "v": ["5", "v"],
+    "6": ["6", "vi"], "vi": ["6", "vi"],
+    "7": ["7", "vii"], "vii": ["7", "vii"],
+    "8": ["8", "viii"], "viii": ["8", "viii"],
+    "9": ["9", "ix"], "ix": ["9", "ix"],
+    "10": ["10", "x"], "x": ["10", "x"]
+}
+
 def extract_target_numbered_entity(question: str) -> Optional[Tuple[str, str]]:
-    """Extracts target entity type and exact number from question (e.g. ("table", "1"), ("figure", "2"), ("section", "3"))."""
+    """Extracts target entity type and exact number/identifier from question (e.g. ("table", "1"), ("figure", "iv"), ("section", "3"), ("table", "a"))."""
     if not question:
         return None
     q_lower = question.lower()
-    match = re.search(r'\b(table|figure|fig|section|page)\.?\s*(?:[#№]\s*)?([0-9]+(?:\.[0-9]+)*|[a-z])\b', q_lower)
+    match = re.search(r'\b(table|figure|fig|section|page)\.?\s*(?:[#№]\s*)?([0-9]+(?:\.[0-9]+)*|viii|vii|vi|iv|iii|ii|ix|x|v|i|[a-z])\b', q_lower)
     if match:
         ent_type = match.group(1)
         if ent_type == "fig":
@@ -51,20 +64,23 @@ def extract_target_numbered_entity(question: str) -> Optional[Tuple[str, str]]:
     return None
 
 def chunk_contains_target_entity(content: str, ent_type: str, ent_num: str) -> bool:
-    """Strictly checks if content contains the specified target entity number (e.g. Table 1, Figure 2) using word boundaries."""
+    """Strictly checks if content contains the specified target entity number (e.g. Table 1, Table I, Figure 2) using word boundaries."""
     if not content or not ent_type or not ent_num:
         return False
     content_lower = content.lower()
-    if ent_type == "figure":
-        pattern = r'\b(?:figure|fig)s?\s*\.?\s*(?:[#№]\s*)?' + re.escape(ent_num) + r'(?!\d)\b'
-    else:
-        pattern = r'\b' + re.escape(ent_type) + r's?\s*(?:[#№]\s*)?' + re.escape(ent_num) + r'(?!\d)\b'
-    if re.search(pattern, content_lower):
-        return True
+    ent_variants = ROMAN_ARABIC_MAP.get(ent_num.lower(), [ent_num.lower()])
 
-    compact_pattern = r'\b' + re.escape(ent_type) + re.escape(ent_num) + r'(?!\d)\b'
-    if re.search(compact_pattern, content_lower):
-        return True
+    for var in ent_variants:
+        if ent_type == "figure":
+            pattern = r'\b(?:figure|fig)s?\s*\.?\s*(?:[#№]\s*)?' + re.escape(var) + r'(?!\d)\b'
+        else:
+            pattern = r'\b' + re.escape(ent_type) + r's?\s*(?:[#№]\s*)?' + re.escape(var) + r'(?!\d)\b'
+        if re.search(pattern, content_lower):
+            return True
+
+        compact_pattern = r'\b' + re.escape(ent_type) + re.escape(var) + r'(?!\d)\b'
+        if re.search(compact_pattern, content_lower):
+            return True
 
     return False
 
@@ -486,7 +502,8 @@ class LLMService:
                 if chunk_contains_target_entity(c.get("content", ""), ent_type, ent_num)
             ]
             if exact_matching:
-                return exact_matching[:4]
+                other_chunks = [c for c in context_chunks if c not in exact_matching]
+                return (exact_matching + other_chunks)[:8]
 
         if scope == "SECTION_QUERY" or any(k in q_lower for k in ["experience", "work experience", "education", "skills", "projects", "project", "contribution", "contributions", "methodology", "results"]):
             target_kw = [k for k in ["experience", "work", "education", "skills", "skill", "projects", "project", "contribution", "contributions", "methodology", "results"] if k in q_lower]
@@ -510,21 +527,22 @@ class LLMService:
                         )
                     ]
                     if header_matching:
-                        return header_matching[:8]
-                    return sec_matching[:8]
+                        return header_matching[:10]
+                    return sec_matching[:10]
 
         if scope in ("DOCUMENT_META", "DOCUMENT_OVERVIEW"):
             non_ref_chunks = [
                 c for c in context_chunks
                 if not any(r in (c.get("parent_section") or "").lower() or r in (c.get("section_path") or "").lower() for r in NOISE_SECTION_MARKERS)
             ]
-            return non_ref_chunks[:10] if non_ref_chunks else context_chunks[:8]
+            return non_ref_chunks[:12] if non_ref_chunks else context_chunks[:10]
 
         if scope in ("TABLE_QUERY", "VISUAL_QUERY"):
             marker = "table" if scope == "TABLE_QUERY" else "fig"
             matching_chunks = [c for c in context_chunks if marker in c.get("content", "").lower() or c.get("chunk_type") == marker]
             if matching_chunks:
-                return matching_chunks[:6]
+                other_chunks = [c for c in context_chunks if c not in matching_chunks]
+                return (matching_chunks + other_chunks)[:8]
 
         # Rank context chunks by semantic similarity score
         sorted_chunks = sorted(
@@ -533,7 +551,7 @@ class LLMService:
             reverse=True
         )
 
-        max_k = 10 if scope in ("SECTION_QUERY", "DISTRIBUTED_QUERY", "ENTITY_LIST", "COMPARISON", "DOCUMENT_OVERVIEW") else 8
+        max_k = 12 if scope in ("SECTION_QUERY", "DISTRIBUTED_QUERY", "ENTITY_LIST", "COMPARISON", "DOCUMENT_OVERVIEW", "FACT_LOOKUP") else 10
         return sorted_chunks[:max_k]
 
     def _validate_claims_and_relevance(
@@ -582,10 +600,17 @@ class LLMService:
                 chunk_contains_target_entity(c.get("content", ""), ent_type, ent_num)
                 for c in supporting_chunks
             )
+            if not has_matching_supporting:
+                matching_in_context = [c for c in context_chunks if chunk_contains_target_entity(c.get("content", ""), ent_type, ent_num)]
+                if matching_in_context:
+                    supporting_chunks = matching_in_context + [c for c in supporting_chunks if c not in matching_in_context]
+                    has_matching_supporting = True
+
             mismatched_mentioned = False
             if ent_type in ("table", "figure", "section"):
-                found_entities = re.findall(rf'\b{ent_type}\s*([0-9]+)\b', raw_answer.lower())
-                if found_entities and ent_num not in found_entities:
+                found_entities = re.findall(rf'\b{ent_type}\s*([0-9]+|[a-z]+)\b', raw_answer.lower())
+                ent_vars = ROMAN_ARABIC_MAP.get(ent_num.lower(), [ent_num.lower()])
+                if found_entities and not any(v in found_entities for v in ent_vars):
                     mismatched_mentioned = True
 
             if not has_matching_supporting or mismatched_mentioned:

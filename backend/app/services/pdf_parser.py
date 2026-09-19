@@ -127,9 +127,9 @@ class PDFParser:
             page_num = page_idx + 1
             pypdf_page = reader.pages[page_idx]
             raw_text = (pypdf_page.extract_text() or "").strip()
-            # Clean up split words (e.g., "V ehicle" -> "Vehicle", "Im pact" -> "Impact")
+            # Clean up hyphenated and OCR-split words (e.g., "V ehicle" -> "Vehicle", "Im pact" -> "Impact")
             text = re.sub(r'(\w+)-\s*\n\s*(\w+)', r'\1\2', raw_text)
-            text = re.sub(r'\b([A-Za-z])\s+([a-z]{2,})\b', r'\1\2', text)
+            text = re.sub(r'\b(?![AIa]\b)([A-Za-z])\s+([a-z]{2,})\b', r'\1\2', text)
             text = re.sub(r'\b([A-Z]{3,})\s+([A-Z])\b', r'\1\2', text)
 
             # Check if page has images / low text

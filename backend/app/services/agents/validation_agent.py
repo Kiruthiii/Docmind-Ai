@@ -84,10 +84,11 @@ class EvidenceValidationAgent:
                 if chunk_contains_target_entity(c.get("content", ""), ent_type, ent_num)
             ]
             if matching_chunks:
+                other_chunks = [c for c in assembled_chunks if c not in matching_chunks]
                 return ValidationResult(
                     sufficient=True,
                     relevance_score=0.98,
-                    minimal_evidence=matching_chunks[:4],
+                    minimal_evidence=(matching_chunks + other_chunks)[:8],
                     requires_retry=False,
                     is_abstention=False,
                     topic_relevant=True,
@@ -164,7 +165,7 @@ class EvidenceValidationAgent:
 
         # 4. Semantic Evidence Assessment:
         # Select top semantically relevant chunks as minimal evidence
-        top_chunks = sorted(assembled_chunks, key=lambda x: x.get("similarity", x.get("hybrid_score", 0.5)), reverse=True)[:6]
+        top_chunks = sorted(assembled_chunks, key=lambda x: x.get("similarity", x.get("hybrid_score", 0.5)), reverse=True)[:10]
 
         similarities = [c.get("similarity", c.get("hybrid_score", 0.6)) for c in top_chunks]
         max_sim = max(similarities) if similarities else 0.85
